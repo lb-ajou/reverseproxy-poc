@@ -1,0 +1,39 @@
+package app
+
+import (
+	"context"
+	"fmt"
+
+	"reverseproxy-poc/internal/config"
+)
+
+func (a *App) Reload(_ context.Context, cfg config.Config) error {
+	if err := config.Validate(cfg); err != nil {
+		return err
+	}
+
+	current := a.state.Snapshot().Config
+	if current.ProxyListenAddr != cfg.ProxyListenAddr || current.DashboardListenAddr != cfg.DashboardListenAddr {
+		return fmt.Errorf("listen address changes require restart in current POC")
+	}
+
+	a.state.Swap(cfg)
+	a.logger.Printf("configuration reloaded from memory")
+
+	return nil
+}
+
+func (a *App) ReloadFromFile(ctx context.Context) error {
+	cfg, err := config.Load(a.configPath)
+	if err != nil {
+		return err
+	}
+
+	if err := a.Reload(ctx, cfg); err != nil {
+		return err
+	}
+
+	a.logger.Printf("configuration reloaded from %s", a.configPath)
+
+	return nil
+}

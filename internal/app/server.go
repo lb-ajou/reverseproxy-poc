@@ -1,0 +1,60 @@
+package app
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+func newServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
+
+func (a *App) Run(ctx context.Context) error {
+	errCh := make(chan error, 2)
+
+	go a.serve("proxy", a.proxyServer, errCh)
+	go a.serve("dashboard", a.dashboardServer, errCh)
+
+	select {
+	case <-ctx.Done():
+		return a.shutdownWithTimeout(context.Background())
+	case err := <-errCh:
+		_ = a.shutdownWithTimeout(context.Background())
+		return err
+	}
+}
+
+func (a *App) Shutdown(ctx context.Context) error {
+	var errs []error
+
+	if err := a.proxyServer.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("shutdown proxy server: %w", err))
+	}
+	if err := a.dashboardServer.Shutdown(ctx); err != nil {
+		errs = append(errs, fmt.Errorf("shutdown dashboard server: %w", err))
+	}
+
+	return errors.Join(errs...)
+}
+
+func (a *App) shutdownWithTimeout(ctx context.Context) error {
+	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	return a.Shutdown(shutdownCtx)
+}
+
+func (a *App) serve(name string, srv *http.Server, errCh chan<- error) {
+	a.logger.Printf("%s server listening on %s", name, srv.Addr)
+
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		errCh <- fmt.Errorf("%s server failed: %w", name, err)
+	}
+}
