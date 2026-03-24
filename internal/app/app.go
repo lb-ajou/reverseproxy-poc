@@ -43,7 +43,7 @@ func New(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, err
 		logger:           logger,
 		configPath:       configPath,
 		state:            state,
-		proxyHandler:     proxy.NewHandler(),
+		proxyHandler:     proxy.NewHandler(state),
 		dashboardHandler: dashboard.NewHandler(state),
 	}
 
