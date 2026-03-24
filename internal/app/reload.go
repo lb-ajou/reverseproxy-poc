@@ -7,13 +7,15 @@ import (
 	"reverseproxy-poc/internal/config"
 )
 
-func (a *App) Reload(_ context.Context, cfg config.Config) error {
+func (a *App) Reload(_ context.Context, cfg config.AppConfig) error {
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
 
-	current := a.state.Snapshot().Config
-	if current.ProxyListenAddr != cfg.ProxyListenAddr || current.DashboardListenAddr != cfg.DashboardListenAddr {
+	current := a.state.Snapshot().AppConfig
+	if current.ProxyListenAddr != cfg.ProxyListenAddr ||
+		current.DashboardListenAddr != cfg.DashboardListenAddr ||
+		current.ProxyConfigDir != cfg.ProxyConfigDir {
 		return fmt.Errorf("listen address changes require restart in current POC")
 	}
 

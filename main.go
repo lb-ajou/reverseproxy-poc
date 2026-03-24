@@ -14,7 +14,7 @@ import (
 func main() {
 	logger := log.New(os.Stdout, "[reverseproxy] ", log.LstdFlags|log.Lmicroseconds)
 
-	configPath := "configs/proxy.json"
+	configPath := "configs/app.json"
 	if len(os.Args) > 1 {
 		configPath = os.Args[1]
 	}

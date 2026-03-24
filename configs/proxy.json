@@ -1,4 +1,0 @@
-{
-  "proxyListenAddr": ":8080",
-  "dashboardListenAddr": ":9090"
-}

@@ -21,7 +21,7 @@ type App struct {
 	dashboardServer  *http.Server
 }
 
-func New(cfg config.Config, configPath string, logger *log.Logger) (*App, error) {
+func New(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, error) {
 	if logger == nil {
 		return nil, fmt.Errorf("logger is required")
 	}
