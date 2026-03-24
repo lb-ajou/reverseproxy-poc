@@ -8,7 +8,10 @@ import (
 	"reverseproxy-poc/internal/config"
 	"reverseproxy-poc/internal/dashboard"
 	"reverseproxy-poc/internal/proxy"
+	"reverseproxy-poc/internal/proxyconfig"
+	"reverseproxy-poc/internal/route"
 	appruntime "reverseproxy-poc/internal/runtime"
+	"reverseproxy-poc/internal/upstream"
 )
 
 type App struct {
@@ -29,7 +32,12 @@ func New(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, err
 		return nil, err
 	}
 
-	state := appruntime.NewState(appruntime.NewSnapshot(cfg, nil, nil, nil))
+	snapshot, err := buildSnapshot(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	state := appruntime.NewState(snapshot)
 
 	app := &App{
 		logger:           logger,
@@ -47,4 +55,23 @@ func New(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, err
 
 func (a *App) Snapshot() appruntime.Snapshot {
 	return a.state.Snapshot()
+}
+
+func buildSnapshot(appCfg config.AppConfig) (appruntime.Snapshot, error) {
+	proxyCfgs, err := proxyconfig.LoadDir(appCfg.ProxyConfigDir)
+	if err != nil {
+		return appruntime.Snapshot{}, fmt.Errorf("load proxy configs: %w", err)
+	}
+
+	routes, err := route.BuildTable(proxyCfgs)
+	if err != nil {
+		return appruntime.Snapshot{}, fmt.Errorf("build route table: %w", err)
+	}
+
+	upstreams, err := upstream.BuildRegistry(proxyCfgs)
+	if err != nil {
+		return appruntime.Snapshot{}, fmt.Errorf("build upstream registry: %w", err)
+	}
+
+	return appruntime.NewSnapshot(appCfg, proxyCfgs, routes, upstreams), nil
 }
