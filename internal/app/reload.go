@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"reverseproxy-poc/internal/config"
+	appruntime "reverseproxy-poc/internal/runtime"
 )
 
 func (a *App) Reload(_ context.Context, cfg config.AppConfig) error {
@@ -19,7 +20,7 @@ func (a *App) Reload(_ context.Context, cfg config.AppConfig) error {
 		return fmt.Errorf("listen address changes require restart in current POC")
 	}
 
-	a.state.Swap(cfg)
+	a.state.Swap(appruntime.NewSnapshot(cfg, nil, nil, nil))
 	a.logger.Printf("configuration reloaded from memory")
 
 	return nil

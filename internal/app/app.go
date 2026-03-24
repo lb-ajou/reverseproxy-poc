@@ -29,7 +29,7 @@ func New(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, err
 		return nil, err
 	}
 
-	state := appruntime.NewState(cfg)
+	state := appruntime.NewState(appruntime.NewSnapshot(cfg, nil, nil, nil))
 
 	app := &App{
 		logger:           logger,
