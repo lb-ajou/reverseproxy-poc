@@ -12,10 +12,10 @@ type State struct {
 	snapshot Snapshot
 }
 
-func NewState(cfg config.Config) *State {
+func NewState(cfg config.AppConfig) *State {
 	return &State{
 		snapshot: Snapshot{
-			Config:    cfg,
+			AppConfig: cfg,
 			AppliedAt: time.Now(),
 		},
 	}
@@ -28,12 +28,12 @@ func (s *State) Snapshot() Snapshot {
 	return s.snapshot
 }
 
-func (s *State) Swap(cfg config.Config) Snapshot {
+func (s *State) Swap(cfg config.AppConfig) Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.snapshot = Snapshot{
-		Config:    cfg,
+		AppConfig: cfg,
 		AppliedAt: time.Now(),
 	}
 

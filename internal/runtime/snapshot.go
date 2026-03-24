@@ -7,6 +7,6 @@ import (
 )
 
 type Snapshot struct {
-	Config    config.Config
+	AppConfig config.AppConfig
 	AppliedAt time.Time
 }
