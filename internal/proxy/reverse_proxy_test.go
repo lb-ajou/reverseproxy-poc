@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"reverseproxy-poc/internal/config"
 	"reverseproxy-poc/internal/route"
@@ -80,6 +81,53 @@ func TestHandlerServeHTTP_ReturnsNotFoundWhenNoRouteMatches(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	if got, want := rec.Result().StatusCode, http.StatusNotFound; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+}
+
+func TestHandlerServeHTTP_ReturnsBadGatewayWhenNoHealthyTargets(t *testing.T) {
+	registry, err := upstream.NewRegistry([]upstream.Pool{
+		{
+			GlobalID: "default:pool-api",
+			Targets: []upstream.Target{
+				{Raw: "10.0.0.11:8080"},
+				{Raw: "10.0.0.12:8080"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("upstream.NewRegistry() error = %v", err)
+	}
+
+	pool, ok := registry.Get("default:pool-api")
+	if !ok {
+		t.Fatal("registry.Get() returned no pool")
+	}
+	pool.SetTargetUnhealthy(0, time.Now(), "timeout")
+	pool.SetTargetUnhealthy(1, time.Now(), "timeout")
+
+	snapshot := runtime.NewSnapshot(
+		config.AppConfig{},
+		nil,
+		[]route.Route{
+			{
+				GlobalID:     "default:r-api",
+				Enabled:      true,
+				Hosts:        []string{"api.example.com"},
+				Path:         route.PathMatcher{Kind: route.PathKindPrefix, Value: "/api/"},
+				UpstreamPool: "default:pool-api",
+			},
+		},
+		registry,
+	)
+
+	handler := NewHandler(runtime.NewState(snapshot))
+	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/api/users", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if got, want := rec.Result().StatusCode, http.StatusBadGateway; got != want {
 		t.Fatalf("status = %d, want %d", got, want)
 	}
 }

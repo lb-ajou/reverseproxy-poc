@@ -1,11 +1,14 @@
 package app
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"reverseproxy-poc/internal/config"
+	"reverseproxy-poc/internal/upstream"
 )
 
 func TestBuildSnapshot_LoadsProxyConfigsAndBuildsRuntimeState(t *testing.T) {
@@ -82,5 +85,91 @@ func writeTestJSON(t *testing.T, path, body string) {
 
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func TestAppStartAndStopHealthChecker(t *testing.T) {
+	app := &App{
+		healthChecker: upstream.NewChecker(nil),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	app.startHealthChecker(ctx)
+
+	if app.runCtx == nil {
+		t.Fatal("runCtx is nil")
+	}
+	if app.healthCtx == nil {
+		t.Fatal("healthCtx is nil")
+	}
+	if app.healthCancel == nil {
+		t.Fatal("healthCancel is nil")
+	}
+
+	app.stopHealthChecker()
+
+	if app.runCtx != nil {
+		t.Fatal("runCtx is not nil after stop")
+	}
+	if app.healthCtx != nil {
+		t.Fatal("healthCtx is not nil after stop")
+	}
+	if app.healthCancel != nil {
+		t.Fatal("healthCancel is not nil after stop")
+	}
+}
+
+func TestAppSwapHealthChecker_ReplacesCheckerAndStartsNewContext(t *testing.T) {
+	registry, err := upstream.NewRegistry([]upstream.Pool{
+		{GlobalID: "default:pool-api"},
+	})
+	if err != nil {
+		t.Fatalf("upstream.NewRegistry() error = %v", err)
+	}
+
+	app := &App{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	app.startHealthChecker(ctx)
+	firstHealthCtx := app.healthCtx
+
+	app.swapHealthChecker(registry)
+
+	if app.healthChecker == nil {
+		t.Fatal("healthChecker is nil")
+	}
+	if app.healthCtx == nil {
+		t.Fatal("healthCtx is nil")
+	}
+	if app.healthCtx == firstHealthCtx {
+		t.Fatal("healthCtx was not replaced")
+	}
+	if app.healthCancel == nil {
+		t.Fatal("healthCancel is nil")
+	}
+
+	app.stopHealthChecker()
+}
+
+func TestAppHealthCheckerCancelCancelsContext(t *testing.T) {
+	app := &App{
+		healthChecker: upstream.NewChecker(nil),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	app.startHealthChecker(ctx)
+	healthCtx := app.healthCtx
+
+	app.stopHealthChecker()
+
+	select {
+	case <-healthCtx.Done():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("health context was not canceled")
 	}
 }
