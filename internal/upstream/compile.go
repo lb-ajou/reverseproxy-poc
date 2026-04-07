@@ -42,12 +42,20 @@ func buildPool(source, localID string, poolCfg proxyconfig.UpstreamPool) (Pool, 
 		targets = append(targets, Target{Raw: upstream})
 	}
 
+	targetStates := make([]TargetState, 0, len(targets))
+	for range targets {
+		targetStates = append(targetStates, TargetState{
+			Healthy: true,
+		})
+	}
+
 	return Pool{
 		GlobalID:    GlobalPoolID(source, localID),
 		LocalID:     localID,
 		Source:      source,
 		Targets:     targets,
 		HealthCheck: buildHealthCheck(poolCfg.HealthCheck),
+		targetState: targetStates,
 	}, nil
 }
 
