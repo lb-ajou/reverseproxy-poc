@@ -39,3 +39,36 @@ func (p *Pool) SnapshotStates() []TargetState {
 
 	return append([]TargetState(nil), p.targetState...)
 }
+
+func (p *Pool) SetTargetHealthy(index int, checkedAt time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if index < 0 || index >= len(p.targetState) {
+		return false
+	}
+
+	p.targetState[index] = TargetState{
+		Healthy:       true,
+		LastCheckedAt: checkedAt,
+	}
+
+	return true
+}
+
+func (p *Pool) SetTargetUnhealthy(index int, checkedAt time.Time, lastErr string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if index < 0 || index >= len(p.targetState) {
+		return false
+	}
+
+	p.targetState[index] = TargetState{
+		Healthy:       false,
+		LastCheckedAt: checkedAt,
+		LastError:     lastErr,
+	}
+
+	return true
+}

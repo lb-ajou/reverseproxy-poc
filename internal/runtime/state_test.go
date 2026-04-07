@@ -6,6 +6,7 @@ import (
 	"reverseproxy-poc/internal/config"
 	"reverseproxy-poc/internal/proxyconfig"
 	"reverseproxy-poc/internal/route"
+	"reverseproxy-poc/internal/upstream"
 )
 
 func TestNewSnapshot_CopiesSlices(t *testing.T) {
@@ -55,5 +56,32 @@ func TestStateSwap_ReplacesSnapshot(t *testing.T) {
 
 	if got, want := state.Snapshot().AppConfig.ProxyListenAddr, ":8081"; got != want {
 		t.Fatalf("state.Snapshot().AppConfig.ProxyListenAddr = %q, want %q", got, want)
+	}
+}
+
+func TestNewSnapshot_PreservesUpstreamRegistryReference(t *testing.T) {
+	registry, err := upstream.NewRegistry([]upstream.Pool{
+		{
+			GlobalID: "default:api",
+			LocalID:  "api",
+			Source:   "default",
+			Targets: []upstream.Target{
+				{Raw: "localhost:8080"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("upstream.NewRegistry() error = %v", err)
+	}
+
+	snapshot := NewSnapshot(
+		config.AppConfig{},
+		nil,
+		nil,
+		registry,
+	)
+
+	if snapshot.Upstreams != registry {
+		t.Fatal("snapshot.Upstreams does not preserve the upstream registry reference")
 	}
 }

@@ -48,7 +48,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	target, ok := pool.NextTarget()
 	if !ok {
-		http.Error(w, "matched upstream pool has no targets", http.StatusBadGateway)
+		http.Error(w, "matched upstream pool has no healthy targets", http.StatusBadGateway)
 		return
 	}
 
