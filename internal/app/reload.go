@@ -25,6 +25,7 @@ func (a *App) Reload(_ context.Context, cfg config.AppConfig) error {
 	}
 
 	a.state.Swap(snapshot)
+	a.swapHealthChecker(snapshot.Upstreams)
 	a.logger.Printf("configuration reloaded from memory")
 
 	return nil

@@ -1,6 +1,11 @@
 package upstream
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"time"
+)
 
 type Registry struct {
 	pools map[string]*Pool
@@ -36,4 +41,51 @@ func (r *Registry) All() []*Pool {
 	}
 
 	return pools
+}
+
+type Checker struct {
+	registry *Registry
+	client   *http.Client
+}
+
+func NewChecker(registry *Registry) *Checker {
+	return &Checker{
+		registry: registry,
+		client:   http.DefaultClient,
+	}
+}
+
+func (c *Checker) Start(ctx context.Context) {
+	if c == nil || c.registry == nil || c.client == nil {
+		return
+	}
+
+	for _, pool := range c.registry.All() {
+		if pool == nil || pool.HealthCheck == nil {
+			continue
+		}
+
+		go c.runPool(ctx, pool)
+	}
+}
+
+func (c *Checker) runPool(ctx context.Context, pool *Pool) {
+	pool.CheckTargets(ctx, c.client)
+
+	interval, err := pool.HealthInterval()
+	if err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pool.CheckTargets(ctx, c.client)
+		}
+	}
 }

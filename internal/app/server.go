@@ -19,6 +19,9 @@ func newServer(addr string, handler http.Handler) *http.Server {
 func (a *App) Run(ctx context.Context) error {
 	errCh := make(chan error, 2)
 
+	a.startHealthChecker(ctx)
+	defer a.stopHealthChecker()
+
 	go a.serve("proxy", a.proxyServer, errCh)
 	go a.serve("dashboard", a.dashboardServer, errCh)
 

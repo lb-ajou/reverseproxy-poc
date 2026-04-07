@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 
 	"reverseproxy-poc/internal/config"
 	"reverseproxy-poc/internal/dashboard"
@@ -18,6 +20,11 @@ type App struct {
 	logger           *log.Logger
 	configPath       string
 	state            *appruntime.State
+	mu               sync.Mutex
+	runCtx           context.Context
+	healthCtx        context.Context
+	healthCancel     context.CancelFunc
+	healthChecker    *upstream.Checker
 	proxyHandler     http.Handler
 	dashboardHandler http.Handler
 	proxyServer      *http.Server
@@ -43,6 +50,7 @@ func New(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, err
 		logger:           logger,
 		configPath:       configPath,
 		state:            state,
+		healthChecker:    upstream.NewChecker(snapshot.Upstreams),
 		proxyHandler:     proxy.NewHandler(state),
 		dashboardHandler: dashboard.NewHandler(state),
 	}
@@ -74,4 +82,54 @@ func buildSnapshot(appCfg config.AppConfig) (appruntime.Snapshot, error) {
 	}
 
 	return appruntime.NewSnapshot(appCfg, proxyCfgs, routes, upstreams), nil
+}
+
+func (a *App) startHealthChecker(ctx context.Context) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.healthCancel != nil {
+		return
+	}
+
+	healthCtx, cancel := context.WithCancel(ctx)
+	a.runCtx = ctx
+	a.healthCtx = healthCtx
+	a.healthCancel = cancel
+
+	if a.healthChecker != nil {
+		a.healthChecker.Start(healthCtx)
+	}
+}
+
+func (a *App) stopHealthChecker() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.healthCancel != nil {
+		a.healthCancel()
+	}
+
+	a.healthCtx = nil
+	a.healthCancel = nil
+	a.runCtx = nil
+}
+
+func (a *App) swapHealthChecker(registry *upstream.Registry) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.healthCancel != nil {
+		a.healthCancel()
+		a.healthCancel = nil
+	}
+
+	a.healthChecker = upstream.NewChecker(registry)
+
+	if a.runCtx != nil && a.healthChecker != nil {
+		healthCtx, cancel := context.WithCancel(a.runCtx)
+		a.healthCtx = healthCtx
+		a.healthCancel = cancel
+		a.healthChecker.Start(healthCtx)
+	}
 }
