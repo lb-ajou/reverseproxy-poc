@@ -3,6 +3,7 @@
 .idea
 .env
 
+configs/proxy/
 internal/dashboard/static/*
 !.gitkeep
 
