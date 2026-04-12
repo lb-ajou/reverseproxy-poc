@@ -28,6 +28,8 @@ type Runtime interface {
 
 type Service interface {
 	ListNamespaces(ctx context.Context) ([]NamespaceView, error)
+	CreateNamespace(ctx context.Context, namespace string) (NamespaceView, error)
+	DeleteNamespace(ctx context.Context, namespace string) error
 	GetNamespaceConfig(ctx context.Context, namespace string) (NamespaceConfigView, error)
 	GetNamespaceRoutes(ctx context.Context, namespace string) ([]proxyconfig.RouteConfig, error)
 	CreateRoute(ctx context.Context, namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error)
@@ -158,6 +160,95 @@ func (s *service) ListNamespaces(_ context.Context) ([]NamespaceView, error) {
 	})
 
 	return items, nil
+}
+
+func (s *service) CreateNamespace(ctx context.Context, namespace string) (NamespaceView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path, err := s.namespacePath(namespace)
+	if err != nil {
+		return NamespaceView{}, err
+	}
+
+	if _, err := os.Stat(path); err == nil {
+		return NamespaceView{}, &APIError{
+			StatusCode: http.StatusConflict,
+			Message:    fmt.Sprintf("namespace %q already exists", namespace),
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return NamespaceView{}, &APIError{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "failed to inspect namespace config",
+			Err:        err,
+		}
+	}
+
+	if err := writeConfigFileAtomic(path, normalizeConfig(proxyconfig.Config{})); err != nil {
+		return NamespaceView{}, &APIError{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "failed to create namespace config",
+			Err:        err,
+		}
+	}
+
+	if err := s.runtime.ReloadFromFile(ctx); err != nil {
+		restoreErr := os.Remove(path)
+		if restoreErr != nil && !errors.Is(restoreErr, os.ErrNotExist) {
+			err = errors.Join(err, restoreErr)
+		}
+
+		return NamespaceView{}, &APIError{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "failed to reload proxy configuration",
+			Err:        err,
+		}
+	}
+
+	return NamespaceView{
+		Namespace: namespace,
+		Path:      path,
+		Exists:    true,
+	}, nil
+}
+
+func (s *service) DeleteNamespace(ctx context.Context, namespace string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	file, err := s.loadNamespaceFile(namespace)
+	if err != nil {
+		return err
+	}
+	if !file.exists {
+		return &APIError{
+			StatusCode: http.StatusNotFound,
+			Message:    fmt.Sprintf("namespace %q was not found", namespace),
+		}
+	}
+
+	if err := os.Remove(file.path); err != nil {
+		return &APIError{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "failed to delete namespace config",
+			Err:        err,
+		}
+	}
+
+	if err := s.runtime.ReloadFromFile(ctx); err != nil {
+		restoreErr := restoreNamespaceFile(file)
+		if restoreErr != nil {
+			err = errors.Join(err, restoreErr)
+		}
+
+		return &APIError{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "failed to reload proxy configuration",
+			Err:        err,
+		}
+	}
+
+	return nil
 }
 
 func (s *service) GetNamespaceConfig(_ context.Context, namespace string) (NamespaceConfigView, error) {

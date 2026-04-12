@@ -148,6 +148,79 @@ func TestListNamespaces_IncludesDefaultWhenMissing(t *testing.T) {
 	}
 }
 
+func TestCreateNamespace_WritesEmptyConfigAndReloads(t *testing.T) {
+	service, testRuntime := newTestService(t)
+
+	view, err := service.CreateNamespace(context.Background(), "admin")
+	if err != nil {
+		t.Fatalf("CreateNamespace() error = %v", err)
+	}
+	if got, want := view.Namespace, "admin"; got != want {
+		t.Fatalf("view.Namespace = %q, want %q", got, want)
+	}
+
+	path := filepath.Join(testRuntime.snapshot.AppConfig.ProxyConfigDir, "admin.json")
+	loaded, err := proxyconfig.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile(admin.json) error = %v", err)
+	}
+	if got, want := len(loaded.Config.Routes), 0; got != want {
+		t.Fatalf("len(loaded.Config.Routes) = %d, want %d", got, want)
+	}
+	if got, want := len(loaded.Config.UpstreamPools), 0; got != want {
+		t.Fatalf("len(loaded.Config.UpstreamPools) = %d, want %d", got, want)
+	}
+
+	items, err := service.ListNamespaces(context.Background())
+	if err != nil {
+		t.Fatalf("ListNamespaces() error = %v", err)
+	}
+	if got, want := len(items), 2; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+}
+
+func TestDeleteNamespace_RemovesFileAndReloads(t *testing.T) {
+	service, testRuntime := newTestService(t)
+	writeTestJSON(t, filepath.Join(testRuntime.snapshot.AppConfig.ProxyConfigDir, "admin.json"), `{
+  "routes": [
+    {
+      "id": "r-admin",
+      "enabled": true,
+      "match": {
+        "hosts": ["admin.example.com"]
+      },
+      "upstream_pool": "pool-admin"
+    }
+  ],
+  "upstream_pools": {
+    "pool-admin": {
+      "upstreams": ["10.0.1.10:8080"]
+    }
+  }
+}`)
+
+	if err := testRuntime.ReloadFromFile(context.Background()); err != nil {
+		t.Fatalf("ReloadFromFile() error = %v", err)
+	}
+
+	if err := service.DeleteNamespace(context.Background(), "admin"); err != nil {
+		t.Fatalf("DeleteNamespace() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(testRuntime.snapshot.AppConfig.ProxyConfigDir, "admin.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("os.Stat(admin.json) error = %v, want not exist", err)
+	}
+
+	items, err := service.ListNamespaces(context.Background())
+	if err != nil {
+		t.Fatalf("ListNamespaces() error = %v", err)
+	}
+	if got, want := len(items), 1; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+}
+
 func newTestService(t *testing.T) (Service, *testRuntime) {
 	t.Helper()
 
