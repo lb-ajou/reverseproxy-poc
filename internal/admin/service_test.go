@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"testing"
 	"time"
 
@@ -164,6 +165,7 @@ func TestCreateNamespace_WritesEmptyConfigAndReloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadFile(admin.json) error = %v", err)
 	}
+	assertFileMode(t, path, configFileMode)
 	if got, want := len(loaded.Config.Routes), 0; got != want {
 		t.Fatalf("len(loaded.Config.Routes) = %d, want %d", got, want)
 	}
@@ -281,6 +283,22 @@ func writeTestJSON(t *testing.T, path, body string) {
 
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("os.WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func assertFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+
+	if goruntime.GOOS == "windows" {
+		t.Skip("file mode bits are not enforced consistently on windows")
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat(%q) error = %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("file mode = %o, want %o", got, want)
 	}
 }
 

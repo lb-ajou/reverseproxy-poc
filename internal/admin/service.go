@@ -17,7 +17,10 @@ import (
 	appruntime "reverseproxy-poc/internal/runtime"
 )
 
-const DefaultNamespace = "default"
+const (
+	DefaultNamespace = "default"
+	configFileMode   = 0o644
+)
 
 var namespacePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
@@ -521,7 +524,7 @@ func (s *service) namespacePath(namespace string) (string, error) {
 
 func restoreNamespaceFile(file namespaceFile) error {
 	if file.exists {
-		return os.WriteFile(file.path, file.rawData, 0o644)
+		return os.WriteFile(file.path, file.rawData, configFileMode)
 	}
 
 	if err := os.Remove(file.path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -551,6 +554,11 @@ func writeConfigFileAtomic(path string, cfg proxyconfig.Config) error {
 	defer func() {
 		_ = os.Remove(tmpPath)
 	}()
+
+	if err := tmp.Chmod(configFileMode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
 
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
