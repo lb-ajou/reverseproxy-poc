@@ -109,34 +109,12 @@ func New(runtime Runtime) Service {
 }
 
 func (s *service) ListNamespaces(_ context.Context) ([]NamespaceView, error) {
-	dir := s.runtime.Snapshot().AppConfig.ProxyConfigDir
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, &APIError{
-			StatusCode: http.StatusInternalServerError,
-			Message:    "failed to read proxy config directory",
-			Err:        err,
-		}
-	}
-
-	items := make([]NamespaceView, 0, len(entries)+1)
+	snapshot := s.runtime.Snapshot()
+	dir := snapshot.AppConfig.ProxyConfigDir
+	items := make([]NamespaceView, 0, len(snapshot.ProxyConfigs)+1)
 	hasDefault := false
 
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-
-		path := filepath.Join(dir, entry.Name())
-		loaded, err := proxyconfig.LoadFile(path)
-		if err != nil {
-			return nil, &APIError{
-				StatusCode: http.StatusInternalServerError,
-				Message:    "failed to load namespace config",
-				Err:        err,
-			}
-		}
-
+	for _, loaded := range snapshot.ProxyConfigs {
 		if loaded.Source == DefaultNamespace {
 			hasDefault = true
 		}
