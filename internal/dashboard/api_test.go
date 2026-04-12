@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,36 @@ func TestRoutesEndpoint_RejectsNonGet(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	if got, want := rec.Result().StatusCode, http.StatusMethodNotAllowed; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+}
+
+func TestSPAPath_ReturnsDashboardHTML(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}))
+	req := httptest.NewRequest(http.MethodGet, "/routes", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if got, want := rec.Result().StatusCode, http.StatusOK; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if got := rec.Result().Header.Get("Content-Type"); !strings.Contains(got, "text/html") {
+		t.Fatalf("Content-Type = %q, want text/html", got)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "<!doctype html>") {
+		t.Fatalf("body did not contain HTML document")
+	}
+}
+
+func TestUnknownAPIPath_ReturnsNotFound(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}))
+	req := httptest.NewRequest(http.MethodGet, "/api/unknown", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if got, want := rec.Result().StatusCode, http.StatusNotFound; got != want {
 		t.Fatalf("status = %d, want %d", got, want)
 	}
 }
