@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,77 +9,194 @@ import (
 	"testing"
 	"time"
 
+	"reverseproxy-poc/internal/admin"
 	"reverseproxy-poc/internal/config"
 	"reverseproxy-poc/internal/proxyconfig"
-	"reverseproxy-poc/internal/route"
 	"reverseproxy-poc/internal/runtime"
-	"reverseproxy-poc/internal/upstream"
 )
 
-func TestConfigEndpoint_ReturnsStructuredSnapshotView(t *testing.T) {
-	registry, err := upstream.NewRegistry([]upstream.Pool{
-		{
-			GlobalID: "default:pool-api",
-			LocalID:  "pool-api",
-			Source:   "default",
-			Targets: []upstream.Target{
-				{Raw: "10.0.0.11:8080"},
-			},
+type stubService struct {
+	listNamespacesFn        func() ([]admin.NamespaceView, error)
+	getNamespaceConfigFn    func(namespace string) (admin.NamespaceConfigView, error)
+	getNamespaceRoutesFn    func(namespace string) ([]proxyconfig.RouteConfig, error)
+	createRouteFn           func(namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error)
+	updateRouteFn           func(namespace, id string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error)
+	deleteRouteFn           func(namespace, id string) error
+	getNamespaceUpstreamsFn func(namespace string) (map[string]proxyconfig.UpstreamPool, error)
+	createUpstreamPoolFn    func(namespace, id string, pool proxyconfig.UpstreamPool) (proxyconfig.UpstreamPool, error)
+	updateUpstreamPoolFn    func(namespace, id string, pool proxyconfig.UpstreamPool) (proxyconfig.UpstreamPool, error)
+	deleteUpstreamPoolFn    func(namespace, id string) error
+}
+
+func (s stubService) ListNamespaces(_ context.Context) ([]admin.NamespaceView, error) {
+	if s.listNamespacesFn != nil {
+		return s.listNamespacesFn()
+	}
+	return nil, nil
+}
+
+func (s stubService) GetNamespaceConfig(_ context.Context, namespace string) (admin.NamespaceConfigView, error) {
+	if s.getNamespaceConfigFn != nil {
+		return s.getNamespaceConfigFn(namespace)
+	}
+	return admin.NamespaceConfigView{}, nil
+}
+
+func (s stubService) GetNamespaceRoutes(_ context.Context, namespace string) ([]proxyconfig.RouteConfig, error) {
+	if s.getNamespaceRoutesFn != nil {
+		return s.getNamespaceRoutesFn(namespace)
+	}
+	return nil, nil
+}
+
+func (s stubService) CreateRoute(_ context.Context, namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
+	if s.createRouteFn != nil {
+		return s.createRouteFn(namespace, route)
+	}
+	return proxyconfig.RouteConfig{}, nil
+}
+
+func (s stubService) UpdateRoute(_ context.Context, namespace, id string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
+	if s.updateRouteFn != nil {
+		return s.updateRouteFn(namespace, id, route)
+	}
+	return proxyconfig.RouteConfig{}, nil
+}
+
+func (s stubService) DeleteRoute(_ context.Context, namespace, id string) error {
+	if s.deleteRouteFn != nil {
+		return s.deleteRouteFn(namespace, id)
+	}
+	return nil
+}
+
+func (s stubService) GetNamespaceUpstreamPools(_ context.Context, namespace string) (map[string]proxyconfig.UpstreamPool, error) {
+	if s.getNamespaceUpstreamsFn != nil {
+		return s.getNamespaceUpstreamsFn(namespace)
+	}
+	return nil, nil
+}
+
+func (s stubService) CreateUpstreamPool(_ context.Context, namespace, id string, pool proxyconfig.UpstreamPool) (proxyconfig.UpstreamPool, error) {
+	if s.createUpstreamPoolFn != nil {
+		return s.createUpstreamPoolFn(namespace, id, pool)
+	}
+	return proxyconfig.UpstreamPool{}, nil
+}
+
+func (s stubService) UpdateUpstreamPool(_ context.Context, namespace, id string, pool proxyconfig.UpstreamPool) (proxyconfig.UpstreamPool, error) {
+	if s.updateUpstreamPoolFn != nil {
+		return s.updateUpstreamPoolFn(namespace, id, pool)
+	}
+	return proxyconfig.UpstreamPool{}, nil
+}
+
+func (s stubService) DeleteUpstreamPool(_ context.Context, namespace, id string) error {
+	if s.deleteUpstreamPoolFn != nil {
+		return s.deleteUpstreamPoolFn(namespace, id)
+	}
+	return nil
+}
+
+func TestConfigEndpoint_ReturnsEditableConfigForDefaultNamespace(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+		getNamespaceConfigFn: func(namespace string) (admin.NamespaceConfigView, error) {
+			if namespace != admin.DefaultNamespace {
+				t.Fatalf("namespace = %q, want %q", namespace, admin.DefaultNamespace)
+			}
+			return admin.NamespaceConfigView{
+				Namespace: namespace,
+				Exists:    true,
+				Routes: []proxyconfig.RouteConfig{
+					{
+						ID:      "r-api",
+						Enabled: true,
+						Match: proxyconfig.RouteMatchConfig{
+							Hosts: []string{"api.example.com"},
+						},
+						UpstreamPool: "pool-api",
+					},
+				},
+				UpstreamPools: map[string]proxyconfig.UpstreamPool{
+					"pool-api": {Upstreams: []string{"10.0.0.11:8080"}},
+				},
+			}, nil
 		},
 	})
-	if err != nil {
-		t.Fatalf("upstream.NewRegistry() error = %v", err)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got, want := rec.Result().StatusCode, http.StatusOK; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
 	}
 
+	var body admin.NamespaceConfigView
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("json decode error = %v", err)
+	}
+
+	if got, want := body.Namespace, admin.DefaultNamespace; got != want {
+		t.Fatalf("Namespace = %q, want %q", got, want)
+	}
+	if got, want := len(body.Routes), 1; got != want {
+		t.Fatalf("len(Routes) = %d, want %d", got, want)
+	}
+	if got, want := len(body.UpstreamPools), 1; got != want {
+		t.Fatalf("len(UpstreamPools) = %d, want %d", got, want)
+	}
+}
+
+func TestCreateRouteEndpoint_CreatesRouteInDefaultNamespace(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+		createRouteFn: func(namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
+			if namespace != admin.DefaultNamespace {
+				t.Fatalf("namespace = %q, want %q", namespace, admin.DefaultNamespace)
+			}
+			if route.ID != "r-api" {
+				t.Fatalf("route.ID = %q, want %q", route.ID, "r-api")
+			}
+			return route, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/routes", strings.NewReader(`{
+		"id":"r-api",
+		"enabled":true,
+		"match":{"hosts":["api.example.com"]},
+		"upstream_pool":"pool-api"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got, want := rec.Result().StatusCode, http.StatusCreated; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+
+	var body proxyconfig.RouteConfig
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("json decode error = %v", err)
+	}
+	if got, want := body.ID, "r-api"; got != want {
+		t.Fatalf("ID = %q, want %q", got, want)
+	}
+}
+
+func TestRuntimeConfigEndpoint_ReturnsStructuredSnapshotView(t *testing.T) {
 	snapshot := runtime.Snapshot{
 		AppConfig: config.AppConfig{
 			ProxyListenAddr:     ":8080",
 			DashboardListenAddr: ":9090",
 			ProxyConfigDir:      "configs/proxy",
 		},
-		ProxyConfigs: []proxyconfig.LoadedConfig{
-			{
-				Source: "default",
-				Path:   "configs/proxy/default.json",
-				Config: proxyconfig.Config{
-					Name: "default",
-					Routes: []proxyconfig.RouteConfig{
-						{
-							ID:      "r-api",
-							Enabled: true,
-							Match: proxyconfig.RouteMatchConfig{
-								Hosts: []string{"api.example.com"},
-							},
-							UpstreamPool: "pool-api",
-						},
-					},
-					UpstreamPools: map[string]proxyconfig.UpstreamPool{
-						"pool-api": {
-							Upstreams: []string{"10.0.0.11:8080"},
-						},
-					},
-				},
-			},
-		},
-		RouteTable: []route.Route{
-			{
-				GlobalID:     "default:r-api",
-				LocalID:      "r-api",
-				Source:       "default",
-				Enabled:      true,
-				Hosts:        []string{"api.example.com"},
-				Path:         route.PathMatcher{Kind: route.PathKindAny},
-				UpstreamPool: "default:pool-api",
-			},
-		},
-		Upstreams: registry,
 		AppliedAt: time.Unix(1700000000, 0).UTC(),
 	}
 
-	handler := NewHandler(runtime.NewState(snapshot))
-	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	handler := NewHandler(runtime.NewState(snapshot), stubService{})
+	req := httptest.NewRequest(http.MethodGet, "/api/runtime/config", nil)
 	rec := httptest.NewRecorder()
-
 	handler.ServeHTTP(rec, req)
 
 	if got, want := rec.Result().StatusCode, http.StatusOK; got != want {
@@ -89,38 +207,52 @@ func TestConfigEndpoint_ReturnsStructuredSnapshotView(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("json decode error = %v", err)
 	}
-
 	if got, want := body.AppConfig.ProxyConfigDir, "configs/proxy"; got != want {
 		t.Fatalf("AppConfig.ProxyConfigDir = %q, want %q", got, want)
 	}
-	if got, want := len(body.ProxyConfigs), 1; got != want {
-		t.Fatalf("len(ProxyConfigs) = %d, want %d", got, want)
-	}
-	if got, want := len(body.RouteTable), 1; got != want {
-		t.Fatalf("len(RouteTable) = %d, want %d", got, want)
-	}
-	if got, want := len(body.Upstreams), 1; got != want {
-		t.Fatalf("len(Upstreams) = %d, want %d", got, want)
-	}
-	if got, want := body.Upstreams[0].GlobalID, "default:pool-api"; got != want {
-		t.Fatalf("Upstreams[0].GlobalID = %q, want %q", got, want)
-	}
 }
 
-func TestRoutesEndpoint_RejectsNonGet(t *testing.T) {
-	handler := NewHandler(runtime.NewState(runtime.Snapshot{}))
-	req := httptest.NewRequest(http.MethodPost, "/api/routes", nil)
-	rec := httptest.NewRecorder()
+func TestValidationError_ReturnsStructuredErrorBody(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+		createRouteFn: func(namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
+			return proxyconfig.RouteConfig{}, &admin.APIError{
+				StatusCode: http.StatusUnprocessableEntity,
+				Message:    "validation failed",
+				ValidationErrors: []proxyconfig.ValidationError{
+					{Field: "routes[0].id", Message: "duplicate route id"},
+				},
+			}
+		},
+	})
 
+	req := httptest.NewRequest(http.MethodPost, "/api/routes", strings.NewReader(`{
+		"id":"r-api",
+		"enabled":true,
+		"match":{"hosts":["api.example.com"]},
+		"upstream_pool":"pool-api"
+	}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if got, want := rec.Result().StatusCode, http.StatusMethodNotAllowed; got != want {
+	if got, want := rec.Result().StatusCode, http.StatusUnprocessableEntity; got != want {
 		t.Fatalf("status = %d, want %d", got, want)
+	}
+
+	var body admin.APIError
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("json decode error = %v", err)
+	}
+	if got, want := body.Message, "validation failed"; got != want {
+		t.Fatalf("Message = %q, want %q", got, want)
+	}
+	if got, want := len(body.ValidationErrors), 1; got != want {
+		t.Fatalf("len(ValidationErrors) = %d, want %d", got, want)
 	}
 }
 
 func TestSPAPath_ReturnsDashboardHTML(t *testing.T) {
-	handler := NewHandler(runtime.NewState(runtime.Snapshot{}))
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{})
 	req := httptest.NewRequest(http.MethodGet, "/routes", nil)
 	rec := httptest.NewRecorder()
 
@@ -138,7 +270,7 @@ func TestSPAPath_ReturnsDashboardHTML(t *testing.T) {
 }
 
 func TestUnknownAPIPath_ReturnsNotFound(t *testing.T) {
-	handler := NewHandler(runtime.NewState(runtime.Snapshot{}))
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{})
 	req := httptest.NewRequest(http.MethodGet, "/api/unknown", nil)
 	rec := httptest.NewRecorder()
 

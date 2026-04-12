@@ -1,12 +1,7 @@
 package dashboard
 
 import (
-	"bytes"
-	_ "embed"
-	"encoding/json"
-	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"reverseproxy-poc/internal/config"
@@ -15,9 +10,6 @@ import (
 	"reverseproxy-poc/internal/runtime"
 	"reverseproxy-poc/internal/upstream"
 )
-
-//go:embed static/index.html
-var dashboardHTML []byte
 
 type SnapshotView struct {
 	AppConfig    config.AppConfig   `json:"app_config"`
@@ -75,70 +67,6 @@ type UpstreamPoolView struct {
 	Source      string                `json:"source"`
 	Targets     []string              `json:"targets"`
 	HealthCheck *upstream.HealthCheck `json:"health_check,omitempty"`
-}
-
-func NewHandler(state *runtime.State) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, buildSnapshotView(state.Snapshot()))
-	})
-	mux.HandleFunc("/api/app-config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, state.Snapshot().AppConfig)
-	})
-	mux.HandleFunc("/api/proxy-configs", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, buildProxyConfigViews(state.Snapshot().ProxyConfigs))
-	})
-	mux.HandleFunc("/api/routes", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, buildRouteViews(state.Snapshot().RouteTable))
-	})
-	mux.HandleFunc("/api/upstreams", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, buildUpstreamViews(state.Snapshot().Upstreams))
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(dashboardHTML))
-	})
-
-	return mux
-}
-
-func writeJSON(w http.ResponseWriter, value interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(value)
 }
 
 func buildSnapshotView(snapshot runtime.Snapshot) SnapshotView {
