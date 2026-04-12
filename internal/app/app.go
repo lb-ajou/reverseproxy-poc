@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 
+	"reverseproxy-poc/internal/admin"
 	"reverseproxy-poc/internal/config"
 	"reverseproxy-poc/internal/dashboard"
 	"reverseproxy-poc/internal/proxy"
@@ -47,13 +48,14 @@ func New(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, err
 	state := appruntime.NewState(snapshot)
 
 	app := &App{
-		logger:           logger,
-		configPath:       configPath,
-		state:            state,
-		healthChecker:    upstream.NewChecker(snapshot.Upstreams),
-		proxyHandler:     proxy.NewHandler(state),
-		dashboardHandler: dashboard.NewHandler(state),
+		logger:        logger,
+		configPath:    configPath,
+		state:         state,
+		healthChecker: upstream.NewChecker(snapshot.Upstreams),
+		proxyHandler:  proxy.NewHandler(state),
 	}
+
+	app.dashboardHandler = dashboard.NewHandler(state, admin.New(app))
 
 	app.proxyServer = newServer(cfg.ProxyListenAddr, app.proxyHandler)
 	app.dashboardServer = newServer(cfg.DashboardListenAddr, app.dashboardHandler)

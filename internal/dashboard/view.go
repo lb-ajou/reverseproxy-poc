@@ -1,8 +1,6 @@
 package dashboard
 
 import (
-	"encoding/json"
-	"net/http"
 	"sort"
 	"time"
 
@@ -14,43 +12,43 @@ import (
 )
 
 type SnapshotView struct {
-	AppConfig    config.AppConfig    `json:"app_config"`
-	ProxyConfigs []ProxyConfigView   `json:"proxy_configs"`
-	RouteTable   []RouteView         `json:"route_table"`
-	Upstreams    []UpstreamPoolView  `json:"upstreams"`
-	AppliedAt    time.Time           `json:"applied_at"`
+	AppConfig    config.AppConfig   `json:"app_config"`
+	ProxyConfigs []ProxyConfigView  `json:"proxy_configs"`
+	RouteTable   []RouteView        `json:"route_table"`
+	Upstreams    []UpstreamPoolView `json:"upstreams"`
+	AppliedAt    time.Time          `json:"applied_at"`
 }
 
 type ProxyConfigView struct {
-	Source string             `json:"source"`
-	Path   string             `json:"path"`
-	Name   string             `json:"name,omitempty"`
-	Routes []ProxyRouteView   `json:"routes"`
-	Pools  []ProxyPoolView    `json:"upstream_pools"`
+	Source string           `json:"source"`
+	Path   string           `json:"path"`
+	Name   string           `json:"name,omitempty"`
+	Routes []ProxyRouteView `json:"routes"`
+	Pools  []ProxyPoolView  `json:"upstream_pools"`
 }
 
 type ProxyRouteView struct {
-	ID           string            `json:"id"`
-	Enabled      bool              `json:"enabled"`
-	Hosts        []string          `json:"hosts"`
-	Path         *PathMatchView    `json:"path,omitempty"`
-	UpstreamPool string            `json:"upstream_pool"`
+	ID           string         `json:"id"`
+	Enabled      bool           `json:"enabled"`
+	Hosts        []string       `json:"hosts"`
+	Path         *PathMatchView `json:"path,omitempty"`
+	UpstreamPool string         `json:"upstream_pool"`
 }
 
 type ProxyPoolView struct {
-	ID          string                  `json:"id"`
-	Upstreams   []string                `json:"upstreams"`
+	ID          string                         `json:"id"`
+	Upstreams   []string                       `json:"upstreams"`
 	HealthCheck *proxyconfig.HealthCheckConfig `json:"health_check,omitempty"`
 }
 
 type RouteView struct {
-	GlobalID     string         `json:"global_id"`
-	LocalID      string         `json:"local_id"`
-	Source       string         `json:"source"`
-	Enabled      bool           `json:"enabled"`
-	Hosts        []string       `json:"hosts"`
+	GlobalID     string          `json:"global_id"`
+	LocalID      string          `json:"local_id"`
+	Source       string          `json:"source"`
+	Enabled      bool            `json:"enabled"`
+	Hosts        []string        `json:"hosts"`
 	Path         PathMatcherView `json:"path"`
-	UpstreamPool string         `json:"upstream_pool"`
+	UpstreamPool string          `json:"upstream_pool"`
 }
 
 type PathMatcherView struct {
@@ -64,66 +62,11 @@ type PathMatchView struct {
 }
 
 type UpstreamPoolView struct {
-	GlobalID    string             `json:"global_id"`
-	LocalID     string             `json:"local_id"`
-	Source      string             `json:"source"`
-	Targets     []string           `json:"targets"`
+	GlobalID    string                `json:"global_id"`
+	LocalID     string                `json:"local_id"`
+	Source      string                `json:"source"`
+	Targets     []string              `json:"targets"`
 	HealthCheck *upstream.HealthCheck `json:"health_check,omitempty"`
-}
-
-func NewHandler(state *runtime.State) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, buildSnapshotView(state.Snapshot()))
-	})
-	mux.HandleFunc("/api/app-config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, state.Snapshot().AppConfig)
-	})
-	mux.HandleFunc("/api/proxy-configs", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, buildProxyConfigViews(state.Snapshot().ProxyConfigs))
-	})
-	mux.HandleFunc("/api/routes", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, buildRouteViews(state.Snapshot().RouteTable))
-	})
-	mux.HandleFunc("/api/upstreams", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		writeJSON(w, buildUpstreamViews(state.Snapshot().Upstreams))
-	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("dashboard placeholder\n"))
-	})
-
-	return mux
-}
-
-func writeJSON(w http.ResponseWriter, value interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(value)
 }
 
 func buildSnapshotView(snapshot runtime.Snapshot) SnapshotView {

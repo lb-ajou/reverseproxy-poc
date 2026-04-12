@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"testing"
@@ -171,5 +173,32 @@ func TestAppHealthCheckerCancelCancelsContext(t *testing.T) {
 	case <-healthCtx.Done():
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("health context was not canceled")
+	}
+}
+
+func TestNew_WiresDashboardServerHandler(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.AppConfig{
+		ProxyListenAddr:     ":8080",
+		DashboardListenAddr: ":9090",
+		ProxyConfigDir:      dir,
+	}
+
+	app, err := New(cfg, filepath.Join(dir, "app.json"), log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if app.dashboardHandler == nil {
+		t.Fatal("dashboardHandler is nil")
+	}
+	if app.dashboardServer == nil {
+		t.Fatal("dashboardServer is nil")
+	}
+	if app.dashboardServer.Handler == nil {
+		t.Fatal("dashboardServer.Handler is nil")
+	}
+	if app.dashboardServer.Handler != app.dashboardHandler {
+		t.Fatal("dashboardServer.Handler was not wired to dashboardHandler")
 	}
 }
