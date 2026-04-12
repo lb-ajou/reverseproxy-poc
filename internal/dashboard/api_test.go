@@ -17,6 +17,8 @@ import (
 
 type stubService struct {
 	listNamespacesFn        func() ([]admin.NamespaceView, error)
+	createNamespaceFn       func(namespace string) (admin.NamespaceView, error)
+	deleteNamespaceFn       func(namespace string) error
 	getNamespaceConfigFn    func(namespace string) (admin.NamespaceConfigView, error)
 	getNamespaceRoutesFn    func(namespace string) ([]proxyconfig.RouteConfig, error)
 	createRouteFn           func(namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error)
@@ -33,6 +35,20 @@ func (s stubService) ListNamespaces(_ context.Context) ([]admin.NamespaceView, e
 		return s.listNamespacesFn()
 	}
 	return nil, nil
+}
+
+func (s stubService) CreateNamespace(_ context.Context, namespace string) (admin.NamespaceView, error) {
+	if s.createNamespaceFn != nil {
+		return s.createNamespaceFn(namespace)
+	}
+	return admin.NamespaceView{}, nil
+}
+
+func (s stubService) DeleteNamespace(_ context.Context, namespace string) error {
+	if s.deleteNamespaceFn != nil {
+		return s.deleteNamespaceFn(namespace)
+	}
+	return nil
 }
 
 func (s stubService) GetNamespaceConfig(_ context.Context, namespace string) (admin.NamespaceConfigView, error) {
@@ -98,7 +114,7 @@ func (s stubService) DeleteUpstreamPool(_ context.Context, namespace, id string)
 	return nil
 }
 
-func TestConfigEndpoint_ReturnsEditableConfigForDefaultNamespace(t *testing.T) {
+func TestNamespacedConfigEndpoint_ReturnsEditableConfig(t *testing.T) {
 	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
 		getNamespaceConfigFn: func(namespace string) (admin.NamespaceConfigView, error) {
 			if namespace != admin.DefaultNamespace {
@@ -124,7 +140,7 @@ func TestConfigEndpoint_ReturnsEditableConfigForDefaultNamespace(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/namespaces/default/config", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -148,7 +164,7 @@ func TestConfigEndpoint_ReturnsEditableConfigForDefaultNamespace(t *testing.T) {
 	}
 }
 
-func TestCreateRouteEndpoint_CreatesRouteInDefaultNamespace(t *testing.T) {
+func TestCreateRouteEndpoint_CreatesRouteInNamespace(t *testing.T) {
 	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
 		createRouteFn: func(namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
 			if namespace != admin.DefaultNamespace {
@@ -161,7 +177,7 @@ func TestCreateRouteEndpoint_CreatesRouteInDefaultNamespace(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/routes", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/api/namespaces/default/routes", strings.NewReader(`{
 		"id":"r-api",
 		"enabled":true,
 		"match":{"hosts":["api.example.com"]},
@@ -181,6 +197,57 @@ func TestCreateRouteEndpoint_CreatesRouteInDefaultNamespace(t *testing.T) {
 	}
 	if got, want := body.ID, "r-api"; got != want {
 		t.Fatalf("ID = %q, want %q", got, want)
+	}
+}
+
+func TestCreateNamespaceEndpoint_CreatesNamespace(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+		createNamespaceFn: func(namespace string) (admin.NamespaceView, error) {
+			if namespace != "admin" {
+				t.Fatalf("namespace = %q, want %q", namespace, "admin")
+			}
+			return admin.NamespaceView{
+				Namespace: namespace,
+				Path:      "configs/proxy/admin.json",
+				Exists:    true,
+			}, nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/namespaces", strings.NewReader(`{"namespace":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got, want := rec.Result().StatusCode, http.StatusCreated; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+
+	var body admin.NamespaceView
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("json decode error = %v", err)
+	}
+	if got, want := body.Namespace, "admin"; got != want {
+		t.Fatalf("Namespace = %q, want %q", got, want)
+	}
+}
+
+func TestDeleteNamespaceEndpoint_DeletesNamespace(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+		deleteNamespaceFn: func(namespace string) error {
+			if namespace != "admin" {
+				t.Fatalf("namespace = %q, want %q", namespace, "admin")
+			}
+			return nil
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/namespaces/admin", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got, want := rec.Result().StatusCode, http.StatusNoContent; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
 	}
 }
 
@@ -225,7 +292,7 @@ func TestValidationError_ReturnsStructuredErrorBody(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/api/routes", strings.NewReader(`{
+	req := httptest.NewRequest(http.MethodPost, "/api/namespaces/default/routes", strings.NewReader(`{
 		"id":"r-api",
 		"enabled":true,
 		"match":{"hosts":["api.example.com"]},
@@ -248,6 +315,18 @@ func TestValidationError_ReturnsStructuredErrorBody(t *testing.T) {
 	}
 	if got, want := len(body.ValidationErrors), 1; got != want {
 		t.Fatalf("len(ValidationErrors) = %d, want %d", got, want)
+	}
+}
+
+func TestLegacyConfigEndpoint_ReturnsNotFound(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{})
+	req := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if got, want := rec.Result().StatusCode, http.StatusNotFound; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
 	}
 }
 

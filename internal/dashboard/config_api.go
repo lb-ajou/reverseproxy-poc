@@ -23,156 +23,50 @@ type upstreamPoolResponse struct {
 	Pool proxyconfig.UpstreamPool `json:"pool"`
 }
 
+type namespaceRequest struct {
+	Namespace string `json:"namespace"`
+}
+
 func registerConfigAPI(mux *http.ServeMux, service admin.Service) {
-	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeAPIError(w, newMethodNotAllowedError())
-			return
-		}
-
-		configView, err := service.GetNamespaceConfig(r.Context(), admin.DefaultNamespace)
-		if err != nil {
-			writeAPIError(w, err)
-			return
-		}
-
-		writeJSON(w, configView)
-	})
-	mux.HandleFunc("/api/routes", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/namespaces", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			routes, err := service.GetNamespaceRoutes(r.Context(), admin.DefaultNamespace)
+			items, err := service.ListNamespaces(r.Context())
 			if err != nil {
 				writeAPIError(w, err)
 				return
 			}
-			writeJSON(w, routes)
+
+			writeJSON(w, admin.NamespaceListView{
+				Items:            items,
+				DefaultNamespace: admin.DefaultNamespace,
+			})
 		case http.MethodPost:
-			var routeCfg proxyconfig.RouteConfig
-			if err := decodeJSONBody(r, &routeCfg); err != nil {
-				writeAPIError(w, err)
-				return
-			}
-
-			created, err := service.CreateRoute(r.Context(), admin.DefaultNamespace, routeCfg)
-			if err != nil {
-				writeAPIError(w, err)
-				return
-			}
-			writeJSONStatus(w, http.StatusCreated, created)
-		default:
-			writeAPIError(w, newMethodNotAllowedError())
-		}
-	})
-	mux.HandleFunc("/api/routes/", func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathTail(r.URL.Path, "/api/routes/")
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-
-		switch r.Method {
-		case http.MethodPut:
-			var routeCfg proxyconfig.RouteConfig
-			if err := decodeJSONBody(r, &routeCfg); err != nil {
-				writeAPIError(w, err)
-				return
-			}
-
-			updated, err := service.UpdateRoute(r.Context(), admin.DefaultNamespace, id, routeCfg)
-			if err != nil {
-				writeAPIError(w, err)
-				return
-			}
-			writeJSON(w, updated)
-		case http.MethodDelete:
-			if err := service.DeleteRoute(r.Context(), admin.DefaultNamespace, id); err != nil {
-				writeAPIError(w, err)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			writeAPIError(w, newMethodNotAllowedError())
-		}
-	})
-	mux.HandleFunc("/api/upstream-pools", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			pools, err := service.GetNamespaceUpstreamPools(r.Context(), admin.DefaultNamespace)
-			if err != nil {
-				writeAPIError(w, err)
-				return
-			}
-			writeJSON(w, pools)
-		case http.MethodPost:
-			var request upstreamPoolRequest
+			var request namespaceRequest
 			if err := decodeJSONBody(r, &request); err != nil {
 				writeAPIError(w, err)
 				return
 			}
 
-			created, err := service.CreateUpstreamPool(r.Context(), admin.DefaultNamespace, request.ID, request.pool())
+			created, err := service.CreateNamespace(r.Context(), request.Namespace)
 			if err != nil {
 				writeAPIError(w, err)
 				return
 			}
-			writeJSONStatus(w, http.StatusCreated, upstreamPoolResponse{ID: request.ID, Pool: created})
+
+			writeJSONStatus(w, http.StatusCreated, created)
 		default:
 			writeAPIError(w, newMethodNotAllowedError())
 		}
-	})
-	mux.HandleFunc("/api/upstream-pools/", func(w http.ResponseWriter, r *http.Request) {
-		id, ok := pathTail(r.URL.Path, "/api/upstream-pools/")
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-
-		switch r.Method {
-		case http.MethodPut:
-			var pool proxyconfig.UpstreamPool
-			if err := decodeJSONBody(r, &pool); err != nil {
-				writeAPIError(w, err)
-				return
-			}
-
-			updated, err := service.UpdateUpstreamPool(r.Context(), admin.DefaultNamespace, id, pool)
-			if err != nil {
-				writeAPIError(w, err)
-				return
-			}
-			writeJSON(w, updated)
-		case http.MethodDelete:
-			if err := service.DeleteUpstreamPool(r.Context(), admin.DefaultNamespace, id); err != nil {
-				writeAPIError(w, err)
-				return
-			}
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			writeAPIError(w, newMethodNotAllowedError())
-		}
-	})
-	mux.HandleFunc("/api/namespaces", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeAPIError(w, newMethodNotAllowedError())
-			return
-		}
-
-		items, err := service.ListNamespaces(r.Context())
-		if err != nil {
-			writeAPIError(w, err)
-			return
-		}
-
-		writeJSON(w, admin.NamespaceListView{
-			Items:            items,
-			DefaultNamespace: admin.DefaultNamespace,
-		})
 	})
 	mux.HandleFunc("/api/namespaces/", func(w http.ResponseWriter, r *http.Request) {
 		namespace, rest, ok := namespacePathParts(r.URL.Path)
 		if !ok {
 			http.NotFound(w, r)
+			return
+		}
+		if rest == "" {
+			handleNamespaceRoot(w, r, service, namespace)
 			return
 		}
 
@@ -191,6 +85,19 @@ func registerConfigAPI(mux *http.ServeMux, service admin.Service) {
 			http.NotFound(w, r)
 		}
 	})
+}
+
+func handleNamespaceRoot(w http.ResponseWriter, r *http.Request, service admin.Service, namespace string) {
+	switch r.Method {
+	case http.MethodDelete:
+		if err := service.DeleteNamespace(r.Context(), namespace); err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeAPIError(w, newMethodNotAllowedError())
+	}
 }
 
 func handleNamespaceConfig(w http.ResponseWriter, r *http.Request, service admin.Service, namespace string) {
@@ -351,14 +258,17 @@ func namespacePathParts(path string) (namespace, rest string, ok bool) {
 	}
 
 	trimmed := strings.TrimPrefix(path, prefix)
-	parts := strings.Split(trimmed, "/")
-	if len(parts) < 2 {
+	if trimmed == "" {
 		return "", "", false
 	}
-
+	parts := strings.Split(trimmed, "/")
 	namespace, err := url.PathUnescape(parts[0])
 	if err != nil || namespace == "" || strings.Contains(namespace, "/") {
 		return "", "", false
+	}
+
+	if len(parts) == 1 {
+		return namespace, "", true
 	}
 
 	for _, part := range parts[1:] {
