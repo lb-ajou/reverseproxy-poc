@@ -2,4 +2,8 @@
 .gocache
 .idea
 .env
+
+internal/dashboard/static/*
+!.gitkeep
+
 plan/
