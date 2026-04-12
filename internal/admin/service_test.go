@@ -149,6 +149,48 @@ func TestListNamespaces_IncludesDefaultWhenMissing(t *testing.T) {
 	}
 }
 
+func TestListNamespaces_UsesAppliedSnapshot(t *testing.T) {
+	service, testRuntime := newTestService(t)
+	writeTestJSON(t, filepath.Join(testRuntime.snapshot.AppConfig.ProxyConfigDir, "admin.json"), `{
+  "routes": [],
+  "upstream_pools": {}
+}`)
+
+	items, err := service.ListNamespaces(context.Background())
+	if err != nil {
+		t.Fatalf("ListNamespaces() error = %v", err)
+	}
+
+	if got, want := len(items), 1; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+	if got, want := items[0].Namespace, DefaultNamespace; got != want {
+		t.Fatalf("items[0].Namespace = %q, want %q", got, want)
+	}
+	if items[0].Exists {
+		t.Fatal("items[0].Exists = true, want false")
+	}
+
+	if err := testRuntime.ReloadFromFile(context.Background()); err != nil {
+		t.Fatalf("ReloadFromFile() error = %v", err)
+	}
+
+	items, err = service.ListNamespaces(context.Background())
+	if err != nil {
+		t.Fatalf("ListNamespaces() after reload error = %v", err)
+	}
+
+	if got, want := len(items), 2; got != want {
+		t.Fatalf("len(items) after reload = %d, want %d", got, want)
+	}
+	if got, want := items[0].Namespace, "admin"; got != want {
+		t.Fatalf("items[0].Namespace after reload = %q, want %q", got, want)
+	}
+	if !items[0].Exists {
+		t.Fatal("items[0].Exists after reload = false, want true")
+	}
+}
+
 func TestCreateNamespace_WritesEmptyConfigAndReloads(t *testing.T) {
 	service, testRuntime := newTestService(t)
 
