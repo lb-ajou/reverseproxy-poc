@@ -1,9 +1,12 @@
 package dashboard
 
 import (
+	"bytes"
+	_ "embed"
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"reverseproxy-poc/internal/config"
@@ -13,44 +16,47 @@ import (
 	"reverseproxy-poc/internal/upstream"
 )
 
+//go:embed static/index.html
+var dashboardHTML []byte
+
 type SnapshotView struct {
-	AppConfig    config.AppConfig    `json:"app_config"`
-	ProxyConfigs []ProxyConfigView   `json:"proxy_configs"`
-	RouteTable   []RouteView         `json:"route_table"`
-	Upstreams    []UpstreamPoolView  `json:"upstreams"`
-	AppliedAt    time.Time           `json:"applied_at"`
+	AppConfig    config.AppConfig   `json:"app_config"`
+	ProxyConfigs []ProxyConfigView  `json:"proxy_configs"`
+	RouteTable   []RouteView        `json:"route_table"`
+	Upstreams    []UpstreamPoolView `json:"upstreams"`
+	AppliedAt    time.Time          `json:"applied_at"`
 }
 
 type ProxyConfigView struct {
-	Source string             `json:"source"`
-	Path   string             `json:"path"`
-	Name   string             `json:"name,omitempty"`
-	Routes []ProxyRouteView   `json:"routes"`
-	Pools  []ProxyPoolView    `json:"upstream_pools"`
+	Source string           `json:"source"`
+	Path   string           `json:"path"`
+	Name   string           `json:"name,omitempty"`
+	Routes []ProxyRouteView `json:"routes"`
+	Pools  []ProxyPoolView  `json:"upstream_pools"`
 }
 
 type ProxyRouteView struct {
-	ID           string            `json:"id"`
-	Enabled      bool              `json:"enabled"`
-	Hosts        []string          `json:"hosts"`
-	Path         *PathMatchView    `json:"path,omitempty"`
-	UpstreamPool string            `json:"upstream_pool"`
+	ID           string         `json:"id"`
+	Enabled      bool           `json:"enabled"`
+	Hosts        []string       `json:"hosts"`
+	Path         *PathMatchView `json:"path,omitempty"`
+	UpstreamPool string         `json:"upstream_pool"`
 }
 
 type ProxyPoolView struct {
-	ID          string                  `json:"id"`
-	Upstreams   []string                `json:"upstreams"`
+	ID          string                         `json:"id"`
+	Upstreams   []string                       `json:"upstreams"`
 	HealthCheck *proxyconfig.HealthCheckConfig `json:"health_check,omitempty"`
 }
 
 type RouteView struct {
-	GlobalID     string         `json:"global_id"`
-	LocalID      string         `json:"local_id"`
-	Source       string         `json:"source"`
-	Enabled      bool           `json:"enabled"`
-	Hosts        []string       `json:"hosts"`
+	GlobalID     string          `json:"global_id"`
+	LocalID      string          `json:"local_id"`
+	Source       string          `json:"source"`
+	Enabled      bool            `json:"enabled"`
+	Hosts        []string        `json:"hosts"`
 	Path         PathMatcherView `json:"path"`
-	UpstreamPool string         `json:"upstream_pool"`
+	UpstreamPool string          `json:"upstream_pool"`
 }
 
 type PathMatcherView struct {
@@ -64,10 +70,10 @@ type PathMatchView struct {
 }
 
 type UpstreamPoolView struct {
-	GlobalID    string             `json:"global_id"`
-	LocalID     string             `json:"local_id"`
-	Source      string             `json:"source"`
-	Targets     []string           `json:"targets"`
+	GlobalID    string                `json:"global_id"`
+	LocalID     string                `json:"local_id"`
+	Source      string                `json:"source"`
+	Targets     []string              `json:"targets"`
 	HealthCheck *upstream.HealthCheck `json:"health_check,omitempty"`
 }
 
@@ -114,8 +120,17 @@ func NewHandler(state *runtime.State) http.Handler {
 		writeJSON(w, buildUpstreamViews(state.Snapshot().Upstreams))
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = w.Write([]byte("dashboard placeholder\n"))
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(dashboardHTML))
 	})
 
 	return mux
