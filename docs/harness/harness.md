@@ -11,14 +11,15 @@
 
 ## 공식 명령
 
-### `/HARNESS-STRICT`
+### `/HARNESS-STRICT` 또는 `./HARNESS-STRICT`
 
-사용자가 작업 요청 앞에 `/HARNESS-STRICT`를 붙이면 하네스 강제 모드로 해석한다.
+사용자가 작업 요청 앞에 `/HARNESS-STRICT` 또는 `./HARNESS-STRICT`를 붙이면 하네스 강제 모드로 해석한다.
 
 의미:
 
 - 작업 파일 먼저 작성
 - 질문/가정/구현 계획 승인 전 구현 금지
+- `Implementation-Step-Status`와 `Approved-Files`를 먼저 채움
 - 구현 후 `scripts/agent-check.sh fast`
 - 커밋은 하네스 기본 경로 사용
 
@@ -27,6 +28,11 @@
 ```text
 /HARNESS-STRICT
 대시보드 설정 저장 API를 수정해줘
+```
+
+```text
+./HARNESS-STRICT
+새 compose 시나리오를 추가해줘
 ```
 
 ## 시작 순서
@@ -50,6 +56,7 @@
 - `GOCACHE`를 `/tmp/go-build-cache`로 강제한다.
 - 작업 파일의 요구사항 명확성/가정 승인 상태를 검사한다.
 - 작업 파일의 구현 계획 작성 여부와 사용자 승인 상태를 검사한다.
+- 작업 파일의 구현 단계 상태와 승인된 파일 목록을 검사한다.
 - 스테이징된 Go 파일의 함수/메서드 길이 제한을 검사한다.
 - `gofmt -l` 기반 포맷 검사를 수행한다.
 - 소켓 의존 패키지를 제외한 기본 `go test`를 수행한다.
@@ -98,6 +105,8 @@
 - 코드를 쓰기 전에 어떤 파일과 함수/메서드를 수정할지 사용자에게 설명한다.
 - 작업 파일의 `구현 계획 및 승인` 섹션에 그 계획을 기록한다.
 - `Implementation-Approval: approved`가 없으면 구현과 커밋을 진행하지 않는다.
+- `Implementation-Step-Status: approved-for-implementation`가 없으면 구현 단계로 진행하지 않는다.
+- 실제로 수정한 파일은 `Approved-Files` 안에 있어야 한다.
 
 코드 크기 규칙:
 

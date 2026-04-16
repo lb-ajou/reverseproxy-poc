@@ -10,16 +10,16 @@
 
 ## 공식 명령
 
-### `/HARNESS-STRICT`
+### `/HARNESS-STRICT` 또는 `./HARNESS-STRICT`
 
-이 저장소의 공식 하네스 강제 명령이다.
+이 저장소의 공식 하네스 강제 명령이다. 앞의 `./` 유무는 같은 의미로 취급한다.
 
 이 명령이 작업 요청에 포함되면 아래 절차를 우선 적용한다.
 
 1. `plan/tasks/<date>-<slug>.md` 작업 파일을 먼저 작성한다.
 2. 요구사항이 모호하면 질문만 하고 사용자 응답 전까지 구현하지 않는다.
 3. 가정이 생기면 작업 파일에 기록하고 사용자 승인 전까지 구현하지 않는다.
-4. 구현할 파일, 함수, 메서드, 타입을 먼저 설명하고 사용자 승인 전까지 코드 작성하지 않는다.
+4. 구현할 파일, 함수, 메서드, 타입을 먼저 설명하고 `Approved-Files`에 반영한 뒤 사용자 승인 전까지 코드 작성하지 않는다.
 5. 구현 후 `scripts/agent-check.sh fast`를 실행한다.
 6. 커밋은 `scripts/agent-commit.sh "type(scope): 한글 요약"`을 기본 경로로 사용한다.
 
@@ -28,6 +28,11 @@
 ```text
 /HARNESS-STRICT
 리버스프록시 테스트용 compose 환경을 추가해줘
+```
+
+```text
+./HARNESS-STRICT
+대시보드 저장 흐름을 수정해줘
 ```
 
 ## 시작 순서
@@ -60,7 +65,9 @@
 - `Function-Length-Exception`
 - `Function-Length-Approval`
 - `Implementation-Plan-Status`
+- `Implementation-Step-Status`
 - `Implementation-Approval`
+- `Approved-Files`
 - `Docs-Impact`
 
 ## 검증 명령

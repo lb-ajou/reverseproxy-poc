@@ -136,6 +136,8 @@ require_task_metadata() {
     fail "task file must declare Function-Length-Approval"
   grep -Eiq 'Implementation-Plan-Status:[[:space:]]*(drafted|pending|approved)' "$task_file" ||
     fail "task file must declare Implementation-Plan-Status"
+  grep -Eiq 'Implementation-Step-Status:[[:space:]]*(planning-only|awaiting-user-approval|approved-for-implementation)' "$task_file" ||
+    fail "task file must declare Implementation-Step-Status"
   grep -Eiq 'Implementation-Approval:[[:space:]]*(approved|pending)' "$task_file" ||
     fail "task file must declare Implementation-Approval"
 }
@@ -175,6 +177,10 @@ check_requirement_governance() {
     fail "implementation plan must be approved before writing code"
   fi
 
+  if grep -Eiq 'Implementation-Step-Status:[[:space:]]*(planning-only|awaiting-user-approval)' "$task_file"; then
+    fail "implementation step is still waiting for approval"
+  fi
+
   grep -Eiq 'Implementation-Approval:[[:space:]]*approved' "$task_file" ||
     fail "implementation plan requires user approval before implementation"
   grep -Eiq 'Implementation-Approval-Evidence:[[:space:]]*.+$' "$task_file" ||
@@ -190,6 +196,41 @@ function_length_exception_allowed() {
   task_file="$(resolve_task_file)" || return 1
   grep -Eiq 'Function-Length-Exception:[[:space:]]*yes' "$task_file" &&
     grep -Eiq 'Function-Length-Approval:[[:space:]]*approved' "$task_file"
+}
+
+approved_files_contains() {
+  local task_file="$1"
+  local candidate="$2"
+  perl -ne '
+    if (/Approved-Files:\s*(.+)$/) {
+      my @items = map { s/^\s+|\s+$//gr } split /,/, $1;
+      for my $item (@items) {
+        exit 0 if $item eq $ARGV[0];
+      }
+      exit 1;
+    }
+    END { exit 1 }
+  ' "$candidate" "$task_file"
+}
+
+check_approved_files() {
+  local task_file
+  local -a staged=()
+  local path
+
+  task_file="$(resolve_task_file)" || fail "missing task file under plan/tasks/"
+  if ! has_staged_changes; then
+    info "approval: no staged changes, skipping approved file gate"
+    return
+  fi
+
+  mapfile -t staged < <(staged_paths)
+  for path in "${staged[@]}"; do
+    approved_files_contains "$task_file" "$path" ||
+      fail "staged file is not listed in Approved-Files: $path"
+  done
+
+  info "approval: approved files match staged changes"
 }
 
 check_function_length() {
@@ -313,6 +354,7 @@ check_dashboard_asset() {
 }
 
 check_requirement_governance
+check_approved_files
 check_function_length
 check_format
 run_tests

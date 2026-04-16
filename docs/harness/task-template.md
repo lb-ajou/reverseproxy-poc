@@ -58,8 +58,11 @@
 ## 구현 계획 및 승인
 
 - Implementation-Plan-Status: drafted | pending | approved
+- Implementation-Step-Status: planning-only | awaiting-user-approval | approved-for-implementation
 - Planned-Files: 추가/수정할 파일 목록 또는 none
+- Approved-Files: 사용자 승인을 받은 파일 목록 또는 none
 - Planned-Symbols: 추가/수정할 함수, 메서드, 타입 목록 또는 none
+- Approved-Symbols: 사용자 승인을 받은 함수, 메서드, 타입 목록 또는 none
 - Planned-Behavior: 구현할 동작 요약 또는 none
 - Planned-Tests: 추가/수정할 테스트 또는 none
 - Implementation-Approval: approved | pending
@@ -89,9 +92,12 @@
 - `Assumptions-Used: yes`이면 `Assumption-Approval: approved`와 승인 근거가 있어야 한다.
 - `Function-Length-Exception`은 반드시 채운다.
 - `Function-Length-Exception: yes`이면 `Function-Length-Approval: approved`와 승인 근거가 있어야 한다.
-- `Implementation-Plan-Status`와 `Implementation-Approval`은 반드시 채운다.
+- `Implementation-Plan-Status`, `Implementation-Step-Status`, `Implementation-Approval`은 반드시 채운다.
 - `Implementation-Plan-Status: drafted` 또는 `pending`이면 `Implementation-Approval: pending`이어야 하며 코드를 작성하면 안 된다.
-- 실제 구현을 진행하려면 `Implementation-Plan-Status: approved`와 `Implementation-Approval: approved`가 모두 필요하다.
+- `Implementation-Step-Status: planning-only` 또는 `awaiting-user-approval`이면 코드를 작성하면 안 된다.
+- 실제 구현을 진행하려면 `Implementation-Plan-Status: approved`, `Implementation-Step-Status: approved-for-implementation`, `Implementation-Approval: approved`가 모두 필요하다.
+- `Approved-Files`는 실제 수정 전에 사용자 승인을 받은 파일 목록이어야 한다.
+- `Approved-Symbols`는 실제 수정 전에 사용자 승인을 받은 함수/메서드/타입 목록이어야 한다.
 - `Implementation-Approval: approved`이면 승인 근거를 반드시 남긴다.
 - `Docs-Impact`는 반드시 채운다.
 - `Docs-Impact: none`이면 `Docs-Reason`을 반드시 적는다.
