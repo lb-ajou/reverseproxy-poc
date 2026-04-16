@@ -37,26 +37,31 @@ func GlobalPoolID(source, localID string) string {
 }
 
 func buildPool(source, localID string, poolCfg proxyconfig.UpstreamPool) (Pool, error) {
-	targets := make([]Target, 0, len(poolCfg.Upstreams))
-	for _, upstream := range poolCfg.Upstreams {
-		targets = append(targets, Target{Raw: upstream})
-	}
-
-	targetStates := make([]TargetState, 0, len(targets))
-	for range targets {
-		targetStates = append(targetStates, TargetState{
-			Healthy: true,
-		})
-	}
-
 	return Pool{
 		GlobalID:    GlobalPoolID(source, localID),
 		LocalID:     localID,
 		Source:      source,
-		Targets:     targets,
+		Targets:     buildTargets(poolCfg.Upstreams),
 		HealthCheck: buildHealthCheck(poolCfg.HealthCheck),
-		targetState: targetStates,
+		targetState: healthyTargetStates(len(poolCfg.Upstreams)),
+		active:      make([]uint64, len(poolCfg.Upstreams)),
 	}, nil
+}
+
+func buildTargets(upstreams []string) []Target {
+	targets := make([]Target, 0, len(upstreams))
+	for _, upstream := range upstreams {
+		targets = append(targets, Target{Raw: upstream})
+	}
+	return targets
+}
+
+func healthyTargetStates(size int) []TargetState {
+	states := make([]TargetState, 0, size)
+	for i := 0; i < size; i++ {
+		states = append(states, TargetState{Healthy: true})
+	}
+	return states
 }
 
 func buildHealthCheck(hc *proxyconfig.HealthCheckConfig) *HealthCheck {

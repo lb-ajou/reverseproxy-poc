@@ -43,6 +43,57 @@ func TestPoolHashTarget_SkipsUnhealthyTargets(t *testing.T) {
 	}
 }
 
+func TestPoolLeastConnectionTarget_PrefersLowerActiveCount(t *testing.T) {
+	pool := newTestPool("10.0.0.11:8080", "10.0.0.12:8080")
+	first, releaseFirst := requireLeastConnectionTarget(t, pool)
+	if got, want := first.Raw, "10.0.0.11:8080"; got != want {
+		t.Fatalf("first target = %q, want %q", got, want)
+	}
+	second, releaseSecond := requireLeastConnectionTarget(t, pool)
+	if got, want := second.Raw, "10.0.0.12:8080"; got != want {
+		t.Fatalf("second target = %q, want %q", got, want)
+	}
+	releaseSecond()
+	releaseFirst()
+}
+
+func TestPoolLeastConnectionTarget_UsesRoundRobinOnTie(t *testing.T) {
+	pool := newTestPool("10.0.0.11:8080", "10.0.0.12:8080")
+	first, releaseFirst := requireLeastConnectionTarget(t, pool)
+	releaseFirst()
+	second, releaseSecond := requireLeastConnectionTarget(t, pool)
+	releaseSecond()
+	if got, want := first.Raw, "10.0.0.11:8080"; got != want {
+		t.Fatalf("first target = %q, want %q", got, want)
+	}
+	if got, want := second.Raw, "10.0.0.12:8080"; got != want {
+		t.Fatalf("second target = %q, want %q", got, want)
+	}
+}
+
+func TestPoolLeastConnectionTarget_SkipsUnhealthyTargets(t *testing.T) {
+	pool := newTestPool("10.0.0.11:8080", "10.0.0.12:8080")
+	requireSetTargetUnhealthy(t, pool, 0, "down")
+	target, release := requireLeastConnectionTarget(t, pool)
+	defer release()
+	if got, want := target.Raw, "10.0.0.12:8080"; got != want {
+		t.Fatalf("target = %q, want %q", got, want)
+	}
+}
+
+func TestPoolLeastConnectionTarget_ReleaseDecrementsCounterOnce(t *testing.T) {
+	pool := newTestPool("10.0.0.11:8080")
+	_, release := requireLeastConnectionTarget(t, pool)
+	if got, want := pool.ActiveConnections(0), uint64(1); got != want {
+		t.Fatalf("ActiveConnections() = %d, want %d", got, want)
+	}
+	release()
+	release()
+	if got, want := pool.ActiveConnections(0), uint64(0); got != want {
+		t.Fatalf("ActiveConnections() = %d, want %d", got, want)
+	}
+}
+
 func newTestPool(raws ...string) *Pool {
 	targets := make([]Target, 0, len(raws))
 	states := make([]TargetState, 0, len(raws))
@@ -50,7 +101,7 @@ func newTestPool(raws ...string) *Pool {
 		targets = append(targets, Target{Raw: raw})
 		states = append(states, TargetState{Healthy: true})
 	}
-	return &Pool{Targets: targets, targetState: states}
+	return &Pool{Targets: targets, targetState: states, active: make([]uint64, len(raws))}
 }
 
 func requireNextTargets(t *testing.T, pool *Pool, wants ...string) {
@@ -80,4 +131,13 @@ func requireHashTarget(t *testing.T, pool *Pool, key string) Target {
 		t.Fatal("HashTarget() returned no target")
 	}
 	return target
+}
+
+func requireLeastConnectionTarget(t *testing.T, pool *Pool) (Target, func()) {
+	t.Helper()
+	target, release, ok := pool.LeastConnectionTarget()
+	if !ok {
+		t.Fatal("LeastConnectionTarget() returned no target")
+	}
+	return target, release
 }

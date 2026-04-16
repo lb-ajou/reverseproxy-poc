@@ -38,6 +38,15 @@ func TestConfigValidate_AcceptsFiveTupleHash(t *testing.T) {
 	}
 }
 
+func TestConfigValidate_AcceptsLeastConnection(t *testing.T) {
+	cfg := validConfig()
+	cfg.Routes[0].Algorithm = RouteAlgorithmLeastConnection
+
+	if errs := cfg.Validate(); len(errs) > 0 {
+		t.Fatalf("Validate() errors = %v", errs)
+	}
+}
+
 func TestConfigValidate_UnknownUpstreamPool(t *testing.T) {
 	cfg := validConfig()
 	cfg.Routes[0].UpstreamPool = "missing-pool"

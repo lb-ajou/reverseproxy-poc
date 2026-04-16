@@ -17,16 +17,32 @@ func NewRegistry(pools []Pool) (*Registry, error) {
 	}
 
 	for i := range pools {
-		pool := pools[i]
-		if _, exists := registry.pools[pool.GlobalID]; exists {
-			return nil, fmt.Errorf("duplicate upstream pool %q", pool.GlobalID)
+		if err := registry.addPool(pools[i]); err != nil {
+			return nil, err
 		}
-
-		poolCopy := pool
-		registry.pools[pool.GlobalID] = &poolCopy
 	}
 
 	return registry, nil
+}
+
+func (r *Registry) addPool(pool Pool) error {
+	if _, exists := r.pools[pool.GlobalID]; exists {
+		return fmt.Errorf("duplicate upstream pool %q", pool.GlobalID)
+	}
+	r.pools[pool.GlobalID] = copyPool(pool)
+	return nil
+}
+
+func copyPool(pool Pool) *Pool {
+	poolCopy := pool
+	ensureActiveCounters(&poolCopy)
+	return &poolCopy
+}
+
+func ensureActiveCounters(pool *Pool) {
+	if len(pool.active) != len(pool.Targets) {
+		pool.active = make([]uint64, len(pool.Targets))
+	}
 }
 
 func (r *Registry) Get(globalID string) (*Pool, bool) {
@@ -70,16 +86,16 @@ func (c *Checker) Start(ctx context.Context) {
 }
 
 func (c *Checker) runPool(ctx context.Context, pool *Pool) {
-	pool.CheckTargets(ctx, c.client)
-
-	interval, err := pool.HealthInterval()
-	if err != nil {
+	ticker, ok := healthTicker(pool)
+	if !ok {
 		return
 	}
-
-	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	c.runPoolCheck(ctx, pool, ticker)
+}
 
+func (c *Checker) runPoolCheck(ctx context.Context, pool *Pool, ticker *time.Ticker) {
+	pool.CheckTargets(ctx, c.client)
 	for {
 		select {
 		case <-ctx.Done():
@@ -88,4 +104,12 @@ func (c *Checker) runPool(ctx context.Context, pool *Pool) {
 			pool.CheckTargets(ctx, c.client)
 		}
 	}
+}
+
+func healthTicker(pool *Pool) (*time.Ticker, bool) {
+	interval, err := pool.HealthInterval()
+	if err != nil {
+		return nil, false
+	}
+	return time.NewTicker(interval), true
 }

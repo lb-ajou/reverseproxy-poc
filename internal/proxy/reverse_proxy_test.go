@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -157,7 +158,7 @@ func newFiveTupleHandler(t *testing.T) http.Handler {
 	return newProxyHandler([]route.Route{newTestRoute("5_tuple_hash")}, registry)
 }
 
-func newFiveTupleRequest(remoteAddr string) *httptest.Request {
+func newFiveTupleRequest(remoteAddr string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/api/info", nil)
 	req.RemoteAddr = remoteAddr
 	return req
@@ -192,6 +193,33 @@ func TestHandlerServeHTTP_FiveTupleHashSkipsUnhealthyTargets(t *testing.T) {
 	req := newFiveTupleRequest("")
 	req.Header.Set("Forwarded", "for=203.0.113.10")
 	requireBodyEquals(t, handler, req, `{"server":"b"}`)
+}
+
+func TestHandlerServeHTTP_LeastConnectionAvoidsBusyTarget(t *testing.T) {
+	handler, started, release := newLeastConnectionBusyHandler(t)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go serveBlockedRequest(handler, newLeastConnectionRequest(), &wg)
+	<-started
+	requireBodyEquals(t, handler, newLeastConnectionRequest(), `{"server":"fast"}`)
+	close(release)
+	wg.Wait()
+}
+
+func TestHandlerServeHTTP_LeastConnectionReleasesAfterProxyReturns(t *testing.T) {
+	server := newJSONServer(`{"server":"only"}`)
+	defer server.Close()
+	registry := newRegistry(t, server.Listener.Addr().String())
+	handler := newProxyHandler([]route.Route{newTestRoute("least_connection")}, registry)
+	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/api/info", nil)
+	requireBodyEquals(t, handler, req, `{"server":"only"}`)
+	pool, ok := registry.Get("default:pool-api")
+	if !ok {
+		t.Fatal("registry.Get() returned no pool")
+	}
+	if got, want := pool.ActiveConnections(0), uint64(0); got != want {
+		t.Fatalf("ActiveConnections() = %d, want %d", got, want)
+	}
 }
 
 func TestFindHealthyTarget_ReturnsFalseForUnhealthyTarget(t *testing.T) {
@@ -252,4 +280,35 @@ func markTargetUnhealthy(t *testing.T, registry *upstream.Registry, index int, r
 		t.Fatal("registry.Get() returned no pool")
 	}
 	pool.SetTargetUnhealthy(index, time.Now(), reason)
+}
+
+func blockingServer(name string) (*httptest.Server, chan struct{}, chan struct{}) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		_, _ = w.Write([]byte(`{"server":"` + name + `"}`))
+	})
+	return httptest.NewServer(handler), started, release
+}
+
+func newLeastConnectionBusyHandler(t *testing.T) (http.Handler, chan struct{}, chan struct{}) {
+	t.Helper()
+	blocked, started, release := blockingServer("slow")
+	t.Cleanup(blocked.Close)
+	fast := newJSONServer(`{"server":"fast"}`)
+	t.Cleanup(fast.Close)
+	registry := newRegistry(t, blocked.Listener.Addr().String(), fast.Listener.Addr().String())
+	return newProxyHandler([]route.Route{newTestRoute("least_connection")}, registry), started, release
+}
+
+func newLeastConnectionRequest() *http.Request {
+	return httptest.NewRequest(http.MethodGet, "http://api.example.com/api/info", nil)
+}
+
+func serveBlockedRequest(handler http.Handler, req *http.Request, wg *sync.WaitGroup) {
+	defer wg.Done()
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 }

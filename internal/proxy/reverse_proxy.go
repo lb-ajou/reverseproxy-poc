@@ -32,11 +32,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	target, ok := h.selectTarget(w, r, matchedRoute, pool)
+	target, release, ok := h.selectTarget(w, r, matchedRoute, pool)
 	if !ok {
 		http.Error(w, "matched upstream pool has no healthy targets", http.StatusBadGateway)
 		return
 	}
+	defer release()
 	h.serveProxyToTarget(w, r, target)
 }
 
@@ -101,17 +102,27 @@ func upstreamURL(raw string) (*url.URL, error) {
 	return url.Parse("http://" + raw)
 }
 
-func (h *Handler) selectTarget(w http.ResponseWriter, r *http.Request, matchedRoute route.Route, pool *upstream.Pool) (upstream.Target, bool) {
+func (h *Handler) selectTarget(w http.ResponseWriter, r *http.Request, matchedRoute route.Route, pool *upstream.Pool) (upstream.Target, func(), bool) {
 	if pool == nil {
-		return upstream.Target{}, false
+		return upstream.Target{}, noopTargetRelease, false
 	}
+	if usesLeastConnection(matchedRoute) {
+		return pool.LeastConnectionTarget()
+	}
+	return h.nonLeastConnectionTarget(w, r, matchedRoute, pool)
+}
+
+func (h *Handler) nonLeastConnectionTarget(w http.ResponseWriter, r *http.Request, matchedRoute route.Route, pool *upstream.Pool) (upstream.Target, func(), bool) {
 	if usesTupleHash(matchedRoute) {
-		return h.selectTupleHashTarget(r, pool)
+		target, ok := h.selectTupleHashTarget(r, pool)
+		return target, noopTargetRelease, ok
 	}
 	if !usesStickyCookie(matchedRoute) {
-		return pool.NextTarget()
+		target, ok := pool.NextTarget()
+		return target, noopTargetRelease, ok
 	}
-	return h.selectStickyTarget(w, r, matchedRoute, pool)
+	target, ok := h.selectStickyTarget(w, r, matchedRoute, pool)
+	return target, noopTargetRelease, ok
 }
 
 func stickyCookieName(matchedRoute route.Route) string {
@@ -125,6 +136,10 @@ func usesStickyCookie(matchedRoute route.Route) bool {
 
 func usesTupleHash(matchedRoute route.Route) bool {
 	return matchedRoute.Algorithm == string(proxyconfig.RouteAlgorithmFiveTupleHash)
+}
+
+func usesLeastConnection(matchedRoute route.Route) bool {
+	return matchedRoute.Algorithm == string(proxyconfig.RouteAlgorithmLeastConnection)
 }
 
 func (h *Handler) selectTupleHashTarget(r *http.Request, pool *upstream.Pool) (upstream.Target, bool) {
@@ -273,3 +288,5 @@ func targetState(pool *upstream.Pool, index int) (upstream.Target, bool) {
 	}
 	return pool.Targets[index], true
 }
+
+func noopTargetRelease() {}

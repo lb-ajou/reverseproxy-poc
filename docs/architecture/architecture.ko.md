@@ -172,8 +172,14 @@ proxy.Handler / dashboard.Handler
 
 - `round_robin`
 - `sticky_cookie`
+- `5_tuple_hash`
+- `least_connection`
 
 `sticky_cookie`는 첫 요청에서는 기존 round-robin 선택 결과를 사용하고, 이후에는 route 단위 cookie에 저장된 upstream target(`host:port`)을 우선 재사용한다. 해당 target이 unhealthy면 다른 healthy target으로 재선택하고 cookie를 갱신한다.
+
+`5_tuple_hash`는 `protocol`, client address, client port, destination host, destination port를 조합한 키를 healthy target 집합에 stable hash로 매핑한다.
+
+`least_connection`은 실제 backend TCP connection 수가 아니라 프록시가 target별로 추적하는 in-flight 요청 수를 기준으로 동작한다. 여기서 in-flight는 아직 `ReverseProxy.ServeHTTP`가 반환하지 않은 일반 HTTP 요청, 스트리밍 응답, websocket 업그레이드 연결을 모두 포함한다. healthy target 중 현재 in-flight 수가 가장 적은 target을 고르고, 동률이면 round-robin 순서로 결정한다.
 
 즉 “프록시가 어떤 정책으로 요청을 보낼 것인가”에 대한 설정이다.
 
