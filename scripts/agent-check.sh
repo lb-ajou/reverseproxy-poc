@@ -120,6 +120,135 @@ doc_acknowledged() {
     grep -Eiq 'Docs-Reason:[[:space:]]*.+$' "$task_file"
 }
 
+require_task_metadata() {
+  local task_file="$1"
+  grep -Eiq 'Requirements-Clarity:[[:space:]]*(clear|unclear)' "$task_file" ||
+    fail "task file must declare Requirements-Clarity"
+  grep -Eiq 'Clarification-Status:[[:space:]]*(resolved|pending)' "$task_file" ||
+    fail "task file must declare Clarification-Status"
+  grep -Eiq 'Assumptions-Used:[[:space:]]*(no|yes)' "$task_file" ||
+    fail "task file must declare Assumptions-Used"
+  grep -Eiq 'Assumption-Approval:[[:space:]]*(not-required|approved|pending)' "$task_file" ||
+    fail "task file must declare Assumption-Approval"
+  grep -Eiq 'Function-Length-Exception:[[:space:]]*(no|yes)' "$task_file" ||
+    fail "task file must declare Function-Length-Exception"
+  grep -Eiq 'Function-Length-Approval:[[:space:]]*(not-required|approved|pending)' "$task_file" ||
+    fail "task file must declare Function-Length-Approval"
+  grep -Eiq 'Implementation-Plan-Status:[[:space:]]*(drafted|pending|approved)' "$task_file" ||
+    fail "task file must declare Implementation-Plan-Status"
+  grep -Eiq 'Implementation-Approval:[[:space:]]*(approved|pending)' "$task_file" ||
+    fail "task file must declare Implementation-Approval"
+}
+
+check_requirement_governance() {
+  local task_file
+  local clarity_status
+  local assumption_status
+
+  task_file="$(resolve_task_file)" || fail "missing task file under plan/tasks/; create one from docs/harness/task-template.md"
+  require_task_metadata "$task_file"
+
+  if grep -Eiq 'Requirements-Clarity:[[:space:]]*unclear' "$task_file"; then
+    grep -Eiq 'Clarification-Status:[[:space:]]*resolved' "$task_file" ||
+      fail "unclear requirements require Clarification-Status: resolved before implementation"
+    grep -Eiq 'Clarification-Questions:[[:space:]]*(.+|none)' "$task_file" ||
+      fail "unclear requirements must record Clarification-Questions"
+    grep -Eiq 'Clarification-Answer:[[:space:]]*(.+|none)' "$task_file" ||
+      fail "unclear requirements must record Clarification-Answer"
+  fi
+
+  if grep -Eiq 'Assumptions-Used:[[:space:]]*yes' "$task_file"; then
+    grep -Eiq 'Assumption-Approval:[[:space:]]*approved' "$task_file" ||
+      fail "assumptions require user approval before implementation"
+    grep -Eiq 'Approval-Evidence:[[:space:]]*.+$' "$task_file" ||
+      fail "approved assumptions must record Approval-Evidence"
+  fi
+
+  if grep -Eiq 'Function-Length-Exception:[[:space:]]*yes' "$task_file"; then
+    grep -Eiq 'Function-Length-Approval:[[:space:]]*approved' "$task_file" ||
+      fail "function length exceptions require user approval before implementation"
+    grep -Eiq 'Function-Length-Evidence:[[:space:]]*.+$' "$task_file" ||
+      fail "function length exceptions must record Function-Length-Evidence"
+  fi
+
+  if grep -Eiq 'Implementation-Plan-Status:[[:space:]]*(drafted|pending)' "$task_file"; then
+    fail "implementation plan must be approved before writing code"
+  fi
+
+  grep -Eiq 'Implementation-Approval:[[:space:]]*approved' "$task_file" ||
+    fail "implementation plan requires user approval before implementation"
+  grep -Eiq 'Implementation-Approval-Evidence:[[:space:]]*.+$' "$task_file" ||
+    fail "approved implementation plans must record Implementation-Approval-Evidence"
+
+  clarity_status="$(grep -Eio 'Requirements-Clarity:[[:space:]]*(clear|unclear)' "$task_file" | tail -n 1)"
+  assumption_status="$(grep -Eio 'Assumptions-Used:[[:space:]]*(no|yes)' "$task_file" | tail -n 1)"
+  info "task governance: ok (${clarity_status:-unknown}, ${assumption_status:-unknown})"
+}
+
+function_length_exception_allowed() {
+  local task_file
+  task_file="$(resolve_task_file)" || return 1
+  grep -Eiq 'Function-Length-Exception:[[:space:]]*yes' "$task_file" &&
+    grep -Eiq 'Function-Length-Approval:[[:space:]]*approved' "$task_file"
+}
+
+check_function_length() {
+  local -a go_files=()
+  local output=""
+
+  if ! has_staged_changes; then
+    info "length: no staged changes, skipping function length gate"
+    return
+  fi
+
+  mapfile -t go_files < <(git diff --cached --name-only --diff-filter=ACMR -- "*.go")
+  if ((${#go_files[@]} == 0)); then
+    info "length: no staged Go files to check"
+    return
+  fi
+
+  if function_length_exception_allowed; then
+    info "length: approved exception found in $(resolve_task_file)"
+    return
+  fi
+
+  output="$(
+    perl -ne '
+      our ($in_func, $sig, $start, $depth, $line);
+      $line = $.;
+      if (!$in_func && /^\s*func\b/) {
+        $in_func = 1;
+        $sig = $_;
+        $start = $line;
+        $depth = 0;
+      }
+      if ($in_func) {
+        $depth += tr/{/{/;
+        $depth -= tr/}/}/;
+        if ($depth == 0 && /\}/) {
+          my $len = $line - $start + 1;
+          if ($len > 15) {
+            chomp($sig);
+            print "$ARGV:$start:$len:$sig\n";
+          }
+          $in_func = 0;
+          $sig = q{};
+        }
+      }
+    ' "${go_files[@]}"
+  )"
+
+  if [[ -n "$output" ]]; then
+    printf 'FAIL: function or method length exceeded 15 lines:\n' >&2
+    while IFS= read -r line; do
+      printf '  %s\n' "$line" >&2
+    done <<< "$output"
+    fail "split large functions or record an approved exception in the task file"
+  fi
+
+  info "length: ok"
+}
+
 check_doc_sync() {
   local -a staged=()
   local need_dashboard=0
@@ -183,6 +312,8 @@ check_dashboard_asset() {
   info "asset: ok"
 }
 
+check_requirement_governance
+check_function_length
 check_format
 run_tests
 check_doc_sync

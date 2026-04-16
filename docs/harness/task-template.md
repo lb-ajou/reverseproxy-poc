@@ -34,6 +34,37 @@
 
 - 성능, 호환성, 배포, 보안, 운영상 제약
 
+## 요구사항 명확성
+
+- Requirements-Clarity: clear | unclear
+- Clarification-Status: resolved | pending
+- Clarification-Questions: 사용자에게 추가로 물어본 내용 또는 none
+- Clarification-Answer: 사용자 답변 요약 또는 none
+
+## 가정 및 승인
+
+- Assumptions-Used: no | yes
+- Assumption-Notes: 사용한 가정 또는 none
+- Assumption-Approval: not-required | approved | pending
+- Approval-Evidence: 사용자 승인 근거 또는 none
+
+## 코드 컨벤션 영향
+
+- Function-Length-Exception: no | yes
+- Function-Length-Notes: 15줄 초과 함수가 필요한 이유 또는 none
+- Function-Length-Approval: not-required | approved | pending
+- Function-Length-Evidence: 사용자 승인 근거 또는 none
+
+## 구현 계획 및 승인
+
+- Implementation-Plan-Status: drafted | pending | approved
+- Planned-Files: 추가/수정할 파일 목록 또는 none
+- Planned-Symbols: 추가/수정할 함수, 메서드, 타입 목록 또는 none
+- Planned-Behavior: 구현할 동작 요약 또는 none
+- Planned-Tests: 추가/수정할 테스트 또는 none
+- Implementation-Approval: approved | pending
+- Implementation-Approval-Evidence: 사용자 승인 근거 또는 none
+
 ## 수정 예상 영역
 
 - 예상 변경 패키지/문서/설정
@@ -52,6 +83,16 @@
 
 ## 최소 규칙
 
+- `Requirements-Clarity`와 `Clarification-Status`는 반드시 채운다.
+- `Requirements-Clarity: unclear`이면 `Clarification-Status: resolved`와 질문/답변 기록이 있어야 한다.
+- `Assumptions-Used`는 반드시 채운다.
+- `Assumptions-Used: yes`이면 `Assumption-Approval: approved`와 승인 근거가 있어야 한다.
+- `Function-Length-Exception`은 반드시 채운다.
+- `Function-Length-Exception: yes`이면 `Function-Length-Approval: approved`와 승인 근거가 있어야 한다.
+- `Implementation-Plan-Status`와 `Implementation-Approval`은 반드시 채운다.
+- `Implementation-Plan-Status: drafted` 또는 `pending`이면 `Implementation-Approval: pending`이어야 하며 코드를 작성하면 안 된다.
+- 실제 구현을 진행하려면 `Implementation-Plan-Status: approved`와 `Implementation-Approval: approved`가 모두 필요하다.
+- `Implementation-Approval: approved`이면 승인 근거를 반드시 남긴다.
 - `Docs-Impact`는 반드시 채운다.
 - `Docs-Impact: none`이면 `Docs-Reason`을 반드시 적는다.
 - 구조 변경, API 변경, 패키지 책임 변경은 기본적으로 `Docs-Impact: update`다.

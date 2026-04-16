@@ -128,6 +128,11 @@
 - `scripts/install-hooks.sh`
 - `scripts/validate-commit-msg.sh`
 
+규칙:
+
+- 하네스 검증 로직이 커지면 책임별 보조 스크립트로 분리한다
+- 상위 진입점은 유지하되, 세부 검사 로직을 한 파일에 과도하게 누적하지 않는다
+
 ### `.githooks/`
 
 저장소 전용 Git hook 스크립트를 둔다.
