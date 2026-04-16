@@ -9,6 +9,26 @@
 - 문서 동기화와 커밋 메시지 규칙을 기본 흐름에 포함한다.
 - 하네스 자체도 비대해지면 책임별로 분리한다.
 
+## 공식 명령
+
+### `/HARNESS-STRICT`
+
+사용자가 작업 요청 앞에 `/HARNESS-STRICT`를 붙이면 하네스 강제 모드로 해석한다.
+
+의미:
+
+- 작업 파일 먼저 작성
+- 질문/가정/구현 계획 승인 전 구현 금지
+- 구현 후 `scripts/agent-check.sh fast`
+- 커밋은 하네스 기본 경로 사용
+
+사용 예시:
+
+```text
+/HARNESS-STRICT
+대시보드 설정 저장 API를 수정해줘
+```
+
 ## 시작 순서
 
 1. `docs/harness/task-template.md`를 기준으로 `plan/tasks/<date>-<slug>.md`를 작성한다.
@@ -20,6 +40,8 @@
 7. 필요하면 `scripts/agent-check.sh full`로 소켓 의존 테스트까지 확인한다.
 8. `scripts/install-hooks.sh`로 훅을 설치한다.
 9. 커밋은 `scripts/agent-commit.sh "type: 한글 요약"`으로 진행한다.
+
+`/HARNESS-STRICT` 요청은 위 순서를 예외 없이 따른다.
 
 ## 검증 단계
 
