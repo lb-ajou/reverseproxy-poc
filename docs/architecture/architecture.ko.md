@@ -4,6 +4,8 @@
 
 이 문서는 현재 `reverseproxy-poc` 프로젝트의 구조를 “추상적인 레이어 설명”이 아니라 “실제 입력이 어떤 과정을 거쳐 어떤 런타임 결과로 바뀌는지” 기준으로 설명하기 위한 문서다.
 
+새 라우팅 알고리즘을 추가할 때 필요한 공통 설계/구현/검증 절차는 `docs/architecture/routing-algorithm-playbook.ko.md`를 먼저 참고한다.
+
 특히 아래 질문에 답할 수 있도록 작성한다.
 
 - `configs/app.json`과 `configs/proxy/*.json`은 각각 무엇을 의미하는가?
