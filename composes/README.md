@@ -25,6 +25,8 @@
   - sticky cookie 기반 라우팅을 실제 cookie jar로 검증하는 시나리오
 - `5-tuple-hash-check`
   - `X-Forwarded-For` 기반 5-tuple hash 라우팅을 검증하는 시나리오
+- `least-connection-check`
+  - 느린 in-flight 요청이 있을 때 다른 healthy backend로 우회되는지 검증하는 시나리오
 
 ## 실행 예시
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 )
 
 type infoResponse struct {
@@ -18,42 +19,76 @@ type infoResponse struct {
 }
 
 func main() {
-	server := envOrDefault("SERVER_NAME", "test-server")
-	scenario := envOrDefault("SCENARIO_NAME", "unknown")
-	port := envOrDefault("PORT", "8080")
-	version := envOrDefault("SERVER_VERSION", "v1")
-	healthStatus := envIntOrDefault("HEALTH_STATUS", http.StatusOK)
+	cfg := loadServerConfig()
+	info := newInfoResponse(cfg)
+	log.Printf("test server %s listening on :%s", cfg.Server, cfg.Port)
+	serve(cfg, info)
+}
 
+type serverConfig struct {
+	Server       string
+	Scenario     string
+	Port         string
+	Version      string
+	HealthStatus int
+	SleepMillis  int
+}
+
+func loadServerConfig() serverConfig {
+	return serverConfig{
+		Server:       envOrDefault("SERVER_NAME", "test-server"),
+		Scenario:     envOrDefault("SCENARIO_NAME", "unknown"),
+		Port:         envOrDefault("PORT", "8080"),
+		Version:      envOrDefault("SERVER_VERSION", "v1"),
+		HealthStatus: envIntOrDefault("HEALTH_STATUS", http.StatusOK),
+		SleepMillis:  envIntOrDefault("SLEEP_MS", 0),
+	}
+}
+
+func newInfoResponse(cfg serverConfig) infoResponse {
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Fatalf("hostname: %v", err)
 	}
-
-	info := infoResponse{
-		Server:       server,
-		Scenario:     scenario,
+	return infoResponse{
+		Server:       cfg.Server,
+		Scenario:     cfg.Scenario,
 		Hostname:     hostname,
-		Port:         port,
-		Version:      version,
-		HealthStatus: healthStatus,
+		Port:         cfg.Port,
+		Version:      cfg.Version,
+		HealthStatus: cfg.HealthStatus,
 	}
+}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, healthStatus, map[string]interface{}{
-			"ok":            healthStatus >= 200 && healthStatus < 300,
-			"server":        server,
-			"scenario":      scenario,
-			"health_status": healthStatus,
-		})
-	})
-	mux.HandleFunc("/api/info", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, info)
-	})
-
-	log.Printf("test server %s listening on :%s", server, port)
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+func serve(cfg serverConfig, info infoResponse) {
+	mux := newMux(cfg, info)
+	if err := http.ListenAndServe(":"+cfg.Port, mux); err != nil {
 		log.Fatalf("listen: %v", err)
+	}
+}
+
+func newMux(cfg serverConfig, info infoResponse) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", healthHandler(cfg))
+	mux.HandleFunc("/api/info", infoHandler(cfg, info))
+	return mux
+}
+
+func healthHandler(cfg serverConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, cfg.HealthStatus, map[string]interface{}{
+			"ok":            cfg.HealthStatus >= 200 && cfg.HealthStatus < 300,
+			"server":        cfg.Server,
+			"scenario":      cfg.Scenario,
+			"health_status": cfg.HealthStatus,
+		})
+	}
+}
+
+func infoHandler(cfg serverConfig, info infoResponse) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		sleepForMillis(cfg.SleepMillis)
+		writeJSON(w, http.StatusOK, info)
 	}
 }
 
@@ -82,4 +117,10 @@ func envIntOrDefault(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func sleepForMillis(value int) {
+	if value > 0 {
+		time.Sleep(time.Duration(value) * time.Millisecond)
+	}
 }

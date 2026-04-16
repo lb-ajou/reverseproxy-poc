@@ -1,0 +1,33 @@
+{
+  "name": "least-connection-check",
+  "routes": [
+    {
+      "id": "r-least-connection",
+      "enabled": true,
+      "algorithm": "least_connection",
+      "match": {
+        "hosts": ["least.localtest.me"],
+        "path": {
+          "type": "prefix",
+          "value": "/"
+        }
+      },
+      "upstream_pool": "pool-lc"
+    }
+  ],
+  "upstream_pools": {
+    "pool-lc": {
+      "upstreams": [
+        "127.0.0.1:18681",
+        "127.0.0.1:18682",
+        "127.0.0.1:18683"
+      ],
+      "health_check": {
+        "path": "/health",
+        "interval": "5s",
+        "timeout": "2s",
+        "expect_status": 200
+      }
+    }
+  }
+}
