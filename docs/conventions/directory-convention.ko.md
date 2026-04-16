@@ -140,6 +140,7 @@
 현재 예:
 
 - `tools/round-robin-check.sh`
+- `tools/sticky-cookie-check.sh`
 
 규칙:
 

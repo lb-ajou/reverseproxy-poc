@@ -1,13 +1,17 @@
 package proxy
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 
+	"reverseproxy-poc/internal/proxyconfig"
 	"reverseproxy-poc/internal/route"
 	"reverseproxy-poc/internal/runtime"
+	"reverseproxy-poc/internal/upstream"
 )
 
 type Handler struct {
@@ -23,35 +27,61 @@ func NewHandler(state *runtime.State) http.Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.state == nil {
-		http.Error(w, "proxy runtime state is not configured", http.StatusBadGateway)
-		return
-	}
-
-	snapshot := h.state.Snapshot()
-	matchedRoute, ok := route.Resolve(snapshot.RouteTable, r.Host, r.URL.Path)
+	matchedRoute, pool, ok := h.resolveRequest(w, r)
 	if !ok {
-		http.Error(w, "no matching route", http.StatusNotFound)
 		return
 	}
-
-	if snapshot.Upstreams == nil {
-		http.Error(w, "upstream registry is not configured", http.StatusBadGateway)
-		return
-	}
-
-	pool, ok := snapshot.Upstreams.Get(matchedRoute.UpstreamPool)
-	if !ok {
-		http.Error(w, "matched upstream pool does not exist", http.StatusBadGateway)
-		return
-	}
-
-	target, ok := pool.NextTarget()
+	target, ok := h.selectTarget(w, r, matchedRoute, pool)
 	if !ok {
 		http.Error(w, "matched upstream pool has no healthy targets", http.StatusBadGateway)
 		return
 	}
+	h.serveProxyToTarget(w, r, target)
+}
 
+func (h *Handler) resolveRequest(w http.ResponseWriter, r *http.Request) (route.Route, *upstream.Pool, bool) {
+	snapshot, ok := h.snapshotOrError(w)
+	if !ok {
+		return route.Route{}, nil, false
+	}
+	matchedRoute, ok := h.resolveRoute(w, r, snapshot.RouteTable)
+	if !ok {
+		return route.Route{}, nil, false
+	}
+	return h.resolvePool(w, snapshot.Upstreams, matchedRoute)
+}
+
+func (h *Handler) snapshotOrError(w http.ResponseWriter) (runtime.Snapshot, bool) {
+	if h.state == nil {
+		http.Error(w, "proxy runtime state is not configured", http.StatusBadGateway)
+		return runtime.Snapshot{}, false
+	}
+	return h.state.Snapshot(), true
+}
+
+func (h *Handler) resolveRoute(w http.ResponseWriter, r *http.Request, routes []route.Route) (route.Route, bool) {
+	matchedRoute, ok := route.Resolve(routes, r.Host, r.URL.Path)
+	if !ok {
+		http.Error(w, "no matching route", http.StatusNotFound)
+		return route.Route{}, false
+	}
+	return *matchedRoute, true
+}
+
+func (h *Handler) resolvePool(w http.ResponseWriter, registry *upstream.Registry, matchedRoute route.Route) (route.Route, *upstream.Pool, bool) {
+	if registry == nil {
+		http.Error(w, "upstream registry is not configured", http.StatusBadGateway)
+		return route.Route{}, nil, false
+	}
+	pool, ok := registry.Get(matchedRoute.UpstreamPool)
+	if !ok {
+		http.Error(w, "matched upstream pool does not exist", http.StatusBadGateway)
+		return route.Route{}, nil, false
+	}
+	return matchedRoute, pool, true
+}
+
+func (h *Handler) serveProxyToTarget(w http.ResponseWriter, r *http.Request, target upstream.Target) {
 	targetURL, err := upstreamURL(target.Raw)
 	if err != nil {
 		http.Error(w, "invalid upstream target", http.StatusBadGateway)
@@ -68,4 +98,85 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func upstreamURL(raw string) (*url.URL, error) {
 	return url.Parse("http://" + raw)
+}
+
+func (h *Handler) selectTarget(w http.ResponseWriter, r *http.Request, matchedRoute route.Route, pool *upstream.Pool) (upstream.Target, bool) {
+	if pool == nil {
+		return upstream.Target{}, false
+	}
+	if !usesStickyCookie(matchedRoute) {
+		return pool.NextTarget()
+	}
+	return h.selectStickyTarget(w, r, matchedRoute, pool)
+}
+
+func stickyCookieName(matchedRoute route.Route) string {
+	name := "rp_sticky_" + matchedRoute.Source + "_" + matchedRoute.LocalID
+	return strings.NewReplacer(":", "_", "/", "_", " ", "_").Replace(name)
+}
+
+func usesStickyCookie(matchedRoute route.Route) bool {
+	return matchedRoute.Algorithm == string(proxyconfig.RouteAlgorithmStickyCookie)
+}
+
+func (h *Handler) selectStickyTarget(w http.ResponseWriter, r *http.Request, matchedRoute route.Route, pool *upstream.Pool) (upstream.Target, bool) {
+	target, ok, err := stickyCookieTarget(r, matchedRoute, pool)
+	if err != nil || ok {
+		return target, ok
+	}
+	target, ok = pool.NextTarget()
+	if !ok {
+		return upstream.Target{}, false
+	}
+	setStickyCookie(w, matchedRoute, target)
+	return target, true
+}
+
+func stickyCookieTarget(r *http.Request, matchedRoute route.Route, pool *upstream.Pool) (upstream.Target, bool, error) {
+	cookie, err := r.Cookie(stickyCookieName(matchedRoute))
+	if err == nil {
+		target, ok := findHealthyTarget(pool, cookie.Value)
+		return target, ok, nil
+	}
+	if errors.Is(err, http.ErrNoCookie) {
+		return upstream.Target{}, false, nil
+	}
+	return upstream.Target{}, false, err
+}
+
+func setStickyCookie(w http.ResponseWriter, matchedRoute route.Route, target upstream.Target) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     stickyCookieName(matchedRoute),
+		Value:    target.Raw,
+		Path:     "/",
+		HttpOnly: true,
+	})
+}
+
+func findHealthyTarget(pool *upstream.Pool, raw string) (upstream.Target, bool) {
+	if pool == nil {
+		return upstream.Target{}, false
+	}
+	index := findTargetIndex(pool.Targets, raw)
+	if index < 0 {
+		return upstream.Target{}, false
+	}
+	return targetState(pool, index)
+}
+
+func findTargetIndex(targets []upstream.Target, raw string) int {
+	for i, target := range targets {
+		if target.Raw == raw {
+			return i
+		}
+	}
+	return -1
+}
+
+func targetState(pool *upstream.Pool, index int) (upstream.Target, bool) {
+	states := pool.SnapshotStates()
+	if index < len(states) && !states[index].Healthy {
+		return upstream.Target{}, false
+	}
+	return pool.Targets[index], true
 }

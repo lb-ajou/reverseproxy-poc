@@ -12,8 +12,16 @@ type RouteConfig struct {
 	ID           string           `json:"id"`
 	Enabled      bool             `json:"enabled"`
 	Match        RouteMatchConfig `json:"match"`
+	Algorithm    RouteAlgorithm   `json:"algorithm,omitempty"`
 	UpstreamPool string           `json:"upstream_pool"`
 }
+
+type RouteAlgorithm string
+
+const (
+	RouteAlgorithmRoundRobin   RouteAlgorithm = "round_robin"
+	RouteAlgorithmStickyCookie RouteAlgorithm = "sticky_cookie"
+)
 
 type RouteMatchConfig struct {
 	Hosts []string         `json:"hosts"`

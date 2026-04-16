@@ -164,8 +164,16 @@ proxy.Handler / dashboard.Handler
 
 - 어떤 요청이 이 파일의 route에 매칭되는가?
 - 매칭된 요청은 어떤 upstream pool로 가는가?
+- 그 route는 어떤 알고리즘으로 upstream을 선택하는가?
 - 그 pool 안의 backend target은 무엇인가?
 - pool 단위 health check는 어떻게 수행하는가?
+
+현재 선택 알고리즘 예:
+
+- `round_robin`
+- `sticky_cookie`
+
+`sticky_cookie`는 첫 요청에서는 기존 round-robin 선택 결과를 사용하고, 이후에는 route 단위 cookie에 저장된 upstream target(`host:port`)을 우선 재사용한다. 해당 target이 unhealthy면 다른 healthy target으로 재선택하고 cookie를 갱신한다.
 
 즉 “프록시가 어떤 정책으로 요청을 보낼 것인가”에 대한 설정이다.
 

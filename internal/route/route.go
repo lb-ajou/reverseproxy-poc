@@ -9,6 +9,7 @@ type Route struct {
 	Enabled      bool
 	Hosts        []string
 	Path         PathMatcher
+	Algorithm    string
 	UpstreamPool string
 }
 

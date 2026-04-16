@@ -12,6 +12,7 @@ import (
 	"reverseproxy-poc/internal/admin"
 	"reverseproxy-poc/internal/config"
 	"reverseproxy-poc/internal/proxyconfig"
+	"reverseproxy-poc/internal/route"
 	"reverseproxy-poc/internal/runtime"
 )
 
@@ -114,122 +115,197 @@ func (s stubService) DeleteUpstreamPool(_ context.Context, namespace, id string)
 	return nil
 }
 
-func TestNamespacedConfigEndpoint_ReturnsEditableConfig(t *testing.T) {
-	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
-		getNamespaceConfigFn: func(namespace string) (admin.NamespaceConfigView, error) {
-			if namespace != admin.DefaultNamespace {
-				t.Fatalf("namespace = %q, want %q", namespace, admin.DefaultNamespace)
-			}
-			return admin.NamespaceConfigView{
-				Namespace: namespace,
-				Exists:    true,
-				Routes: []proxyconfig.RouteConfig{
-					{
-						ID:      "r-api",
-						Enabled: true,
-						Match: proxyconfig.RouteMatchConfig{
-							Hosts: []string{"api.example.com"},
-						},
-						UpstreamPool: "pool-api",
-					},
-				},
-				UpstreamPools: map[string]proxyconfig.UpstreamPool{
-					"pool-api": {Upstreams: []string{"10.0.0.11:8080"}},
-				},
-			}, nil
-		},
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/api/namespaces/default/config", nil)
+func performDashboardRequest(handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
+	return rec
+}
 
-	if got, want := rec.Result().StatusCode, http.StatusOK; got != want {
-		t.Fatalf("status = %d, want %d", got, want)
-	}
-
-	var body admin.NamespaceConfigView
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+func decodeJSON(t *testing.T, rec *httptest.ResponseRecorder, target interface{}) {
+	t.Helper()
+	if err := json.NewDecoder(rec.Body).Decode(target); err != nil {
 		t.Fatalf("json decode error = %v", err)
-	}
-
-	if got, want := body.Namespace, admin.DefaultNamespace; got != want {
-		t.Fatalf("Namespace = %q, want %q", got, want)
-	}
-	if got, want := len(body.Routes), 1; got != want {
-		t.Fatalf("len(Routes) = %d, want %d", got, want)
-	}
-	if got, want := len(body.UpstreamPools), 1; got != want {
-		t.Fatalf("len(UpstreamPools) = %d, want %d", got, want)
 	}
 }
 
-func TestCreateRouteEndpoint_CreatesRouteInNamespace(t *testing.T) {
-	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+func requireStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {
+	t.Helper()
+	if got := rec.Result().StatusCode; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+}
+
+func defaultNamespaceConfig() admin.NamespaceConfigView {
+	return admin.NamespaceConfigView{
+		Namespace: admin.DefaultNamespace,
+		Exists:    true,
+		Routes: []proxyconfig.RouteConfig{{
+			ID: "r-api", Enabled: true,
+			Match:        proxyconfig.RouteMatchConfig{Hosts: []string{"api.example.com"}},
+			UpstreamPool: "pool-api",
+		}},
+		UpstreamPools: map[string]proxyconfig.UpstreamPool{
+			"pool-api": {Upstreams: []string{"10.0.0.11:8080"}},
+		},
+	}
+}
+
+func stickyRouteSnapshot() runtime.Snapshot {
+	return runtime.Snapshot{
+		RouteTable: []route.Route{{
+			GlobalID: "default:r-api", LocalID: "r-api", Source: "default",
+			Enabled: true, Hosts: []string{"api.example.com"},
+			Path:      route.PathMatcher{Kind: route.PathKindPrefix, Value: "/"},
+			Algorithm: "sticky_cookie", UpstreamPool: "default:pool-api",
+		}},
+	}
+}
+
+func runtimeConfigSnapshot() runtime.Snapshot {
+	return runtime.Snapshot{
+		AppConfig: config.AppConfig{
+			ProxyListenAddr: ":8080", DashboardListenAddr: ":9090", ProxyConfigDir: "configs/proxy",
+		},
+		AppliedAt: time.Unix(1700000000, 0).UTC(),
+	}
+}
+
+const createStickyRouteBody = `{
+	"id":"r-api",
+	"enabled":true,
+	"algorithm":"sticky_cookie",
+	"match":{"hosts":["api.example.com"]},
+	"upstream_pool":"pool-api"
+}`
+
+const createRouteValidationBody = `{
+	"id":"r-api",
+	"enabled":true,
+	"match":{"hosts":["api.example.com"]},
+	"upstream_pool":"pool-api"
+}`
+
+func namespacedConfigHandler(t *testing.T) http.Handler {
+	return NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+		getNamespaceConfigFn: func(namespace string) (admin.NamespaceConfigView, error) {
+			requireDefaultNamespace(t, namespace)
+			return defaultNamespaceConfig(), nil
+		},
+	})
+}
+
+func createRouteHandler(t *testing.T) http.Handler {
+	return NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
 		createRouteFn: func(namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
-			if namespace != admin.DefaultNamespace {
-				t.Fatalf("namespace = %q, want %q", namespace, admin.DefaultNamespace)
-			}
-			if route.ID != "r-api" {
-				t.Fatalf("route.ID = %q, want %q", route.ID, "r-api")
-			}
+			requireDefaultNamespace(t, namespace)
+			requireRouteID(t, route.ID, "r-api")
 			return route, nil
 		},
 	})
+}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/namespaces/default/routes", strings.NewReader(`{
-		"id":"r-api",
-		"enabled":true,
-		"match":{"hosts":["api.example.com"]},
-		"upstream_pool":"pool-api"
-	}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+func createNamespaceHandler(t *testing.T) http.Handler {
+	return NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+		createNamespaceFn: func(namespace string) (admin.NamespaceView, error) {
+			requireNamespace(t, namespace, "admin")
+			return admin.NamespaceView{Namespace: namespace, Path: "configs/proxy/admin.json", Exists: true}, nil
+		},
+	})
+}
 
-	if got, want := rec.Result().StatusCode, http.StatusCreated; got != want {
-		t.Fatalf("status = %d, want %d", got, want)
+func validationErrorHandler() http.Handler {
+	return NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+		createRouteFn: func(string, proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
+			return proxyconfig.RouteConfig{}, duplicateRouteAPIError()
+		},
+	})
+}
+
+func requireDefaultNamespace(t *testing.T, namespace string) {
+	requireNamespace(t, namespace, admin.DefaultNamespace)
+}
+
+func requireNamespace(t *testing.T, got, want string) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("namespace = %q, want %q", got, want)
 	}
+}
 
+func requireRouteID(t *testing.T, got, want string) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("route.ID = %q, want %q", got, want)
+	}
+}
+
+func requireNamespaceConfigCounts(t *testing.T, body admin.NamespaceConfigView) {
+	t.Helper()
+	requireNamespace(t, body.Namespace, admin.DefaultNamespace)
+	requireCount(t, "Routes", len(body.Routes), 1)
+	requireCount(t, "UpstreamPools", len(body.UpstreamPools), 1)
+}
+
+func requireCount(t *testing.T, name string, got, want int) {
+	t.Helper()
+	if got != want {
+		t.Fatalf("len(%s) = %d, want %d", name, got, want)
+	}
+}
+
+func duplicateRouteAPIError() *admin.APIError {
+	return &admin.APIError{
+		StatusCode: http.StatusUnprocessableEntity,
+		Message:    "validation failed",
+		ValidationErrors: []proxyconfig.ValidationError{
+			{Field: "routes[0].id", Message: "duplicate route id"},
+		},
+	}
+}
+
+func TestNamespacedConfigEndpoint_ReturnsEditableConfig(t *testing.T) {
+	rec := performDashboardRequest(namespacedConfigHandler(t), http.MethodGet, "/api/namespaces/default/config", "")
+	requireStatus(t, rec, http.StatusOK)
+	var body admin.NamespaceConfigView
+	decodeJSON(t, rec, &body)
+	requireNamespaceConfigCounts(t, body)
+}
+
+func TestCreateRouteEndpoint_CreatesRouteInNamespace(t *testing.T) {
+	rec := performDashboardRequest(createRouteHandler(t), http.MethodPost, "/api/namespaces/default/routes", createStickyRouteBody)
+	requireStatus(t, rec, http.StatusCreated)
 	var body proxyconfig.RouteConfig
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("json decode error = %v", err)
+	decodeJSON(t, rec, &body)
+	requireRouteID(t, body.ID, "r-api")
+	if got, want := string(body.Algorithm), "sticky_cookie"; got != want {
+		t.Fatalf("Algorithm = %q, want %q", got, want)
 	}
-	if got, want := body.ID, "r-api"; got != want {
-		t.Fatalf("ID = %q, want %q", got, want)
+}
+
+func TestRuntimeConfigEndpoint_ExposesRouteAlgorithm(t *testing.T) {
+	handler := NewHandler(runtime.NewState(stickyRouteSnapshot()), stubService{})
+	rec := performDashboardRequest(handler, http.MethodGet, "/api/runtime/routes", "")
+	requireStatus(t, rec, http.StatusOK)
+	var routes []RouteView
+	decodeJSON(t, rec, &routes)
+	if len(routes) != 1 {
+		t.Fatalf("len(routes) = %d, want 1", len(routes))
+	}
+	if got, want := routes[0].Algorithm, "sticky_cookie"; got != want {
+		t.Fatalf("Algorithm = %q, want %q", got, want)
 	}
 }
 
 func TestCreateNamespaceEndpoint_CreatesNamespace(t *testing.T) {
-	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
-		createNamespaceFn: func(namespace string) (admin.NamespaceView, error) {
-			if namespace != "admin" {
-				t.Fatalf("namespace = %q, want %q", namespace, "admin")
-			}
-			return admin.NamespaceView{
-				Namespace: namespace,
-				Path:      "configs/proxy/admin.json",
-				Exists:    true,
-			}, nil
-		},
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/namespaces", strings.NewReader(`{"namespace":"admin"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if got, want := rec.Result().StatusCode, http.StatusCreated; got != want {
-		t.Fatalf("status = %d, want %d", got, want)
-	}
-
+	rec := performDashboardRequest(createNamespaceHandler(t), http.MethodPost, "/api/namespaces", `{"namespace":"admin"}`)
+	requireStatus(t, rec, http.StatusCreated)
 	var body admin.NamespaceView
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("json decode error = %v", err)
-	}
-	if got, want := body.Namespace, "admin"; got != want {
-		t.Fatalf("Namespace = %q, want %q", got, want)
-	}
+	decodeJSON(t, rec, &body)
+	requireNamespace(t, body.Namespace, "admin")
 }
 
 func TestDeleteNamespaceEndpoint_DeletesNamespace(t *testing.T) {
@@ -242,74 +318,26 @@ func TestDeleteNamespaceEndpoint_DeletesNamespace(t *testing.T) {
 		},
 	})
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/namespaces/admin", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if got, want := rec.Result().StatusCode, http.StatusNoContent; got != want {
-		t.Fatalf("status = %d, want %d", got, want)
-	}
+	rec := performDashboardRequest(handler, http.MethodDelete, "/api/namespaces/admin", "")
+	requireStatus(t, rec, http.StatusNoContent)
 }
 
 func TestRuntimeConfigEndpoint_ReturnsStructuredSnapshotView(t *testing.T) {
-	snapshot := runtime.Snapshot{
-		AppConfig: config.AppConfig{
-			ProxyListenAddr:     ":8080",
-			DashboardListenAddr: ":9090",
-			ProxyConfigDir:      "configs/proxy",
-		},
-		AppliedAt: time.Unix(1700000000, 0).UTC(),
-	}
-
-	handler := NewHandler(runtime.NewState(snapshot), stubService{})
-	req := httptest.NewRequest(http.MethodGet, "/api/runtime/config", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if got, want := rec.Result().StatusCode, http.StatusOK; got != want {
-		t.Fatalf("status = %d, want %d", got, want)
-	}
-
+	handler := NewHandler(runtime.NewState(runtimeConfigSnapshot()), stubService{})
+	rec := performDashboardRequest(handler, http.MethodGet, "/api/runtime/config", "")
+	requireStatus(t, rec, http.StatusOK)
 	var body SnapshotView
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("json decode error = %v", err)
-	}
+	decodeJSON(t, rec, &body)
 	if got, want := body.AppConfig.ProxyConfigDir, "configs/proxy"; got != want {
 		t.Fatalf("AppConfig.ProxyConfigDir = %q, want %q", got, want)
 	}
 }
 
 func TestValidationError_ReturnsStructuredErrorBody(t *testing.T) {
-	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
-		createRouteFn: func(namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
-			return proxyconfig.RouteConfig{}, &admin.APIError{
-				StatusCode: http.StatusUnprocessableEntity,
-				Message:    "validation failed",
-				ValidationErrors: []proxyconfig.ValidationError{
-					{Field: "routes[0].id", Message: "duplicate route id"},
-				},
-			}
-		},
-	})
-
-	req := httptest.NewRequest(http.MethodPost, "/api/namespaces/default/routes", strings.NewReader(`{
-		"id":"r-api",
-		"enabled":true,
-		"match":{"hosts":["api.example.com"]},
-		"upstream_pool":"pool-api"
-	}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if got, want := rec.Result().StatusCode, http.StatusUnprocessableEntity; got != want {
-		t.Fatalf("status = %d, want %d", got, want)
-	}
-
+	rec := performDashboardRequest(validationErrorHandler(), http.MethodPost, "/api/namespaces/default/routes", createRouteValidationBody)
+	requireStatus(t, rec, http.StatusUnprocessableEntity)
 	var body admin.APIError
-	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
-		t.Fatalf("json decode error = %v", err)
-	}
+	decodeJSON(t, rec, &body)
 	if got, want := body.Message, "validation failed"; got != want {
 		t.Fatalf("Message = %q, want %q", got, want)
 	}
@@ -332,14 +360,8 @@ func TestLegacyConfigEndpoint_ReturnsNotFound(t *testing.T) {
 
 func TestSPAPath_ReturnsDashboardHTML(t *testing.T) {
 	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{})
-	req := httptest.NewRequest(http.MethodGet, "/routes", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if got, want := rec.Result().StatusCode, http.StatusOK; got != want {
-		t.Fatalf("status = %d, want %d", got, want)
-	}
+	rec := performDashboardRequest(handler, http.MethodGet, "/routes", "")
+	requireStatus(t, rec, http.StatusOK)
 	if got := rec.Result().Header.Get("Content-Type"); !strings.Contains(got, "text/html") {
 		t.Fatalf("Content-Type = %q, want text/html", got)
 	}

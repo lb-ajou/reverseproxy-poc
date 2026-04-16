@@ -21,6 +21,8 @@
   - 일부 서버가 `/health`에서 실패하는 상태를 재현하는 시나리오
 - `round-robin-check`
   - round-robin 분산을 자동 스크립트로 검증하는 시나리오
+- `sticky-cookie-check`
+  - sticky cookie 기반 라우팅을 실제 cookie jar로 검증하는 시나리오
 
 ## 실행 예시
 

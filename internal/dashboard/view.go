@@ -32,6 +32,7 @@ type ProxyRouteView struct {
 	Enabled      bool           `json:"enabled"`
 	Hosts        []string       `json:"hosts"`
 	Path         *PathMatchView `json:"path,omitempty"`
+	Algorithm    string         `json:"algorithm"`
 	UpstreamPool string         `json:"upstream_pool"`
 }
 
@@ -48,6 +49,7 @@ type RouteView struct {
 	Enabled      bool            `json:"enabled"`
 	Hosts        []string        `json:"hosts"`
 	Path         PathMatcherView `json:"path"`
+	Algorithm    string          `json:"algorithm"`
 	UpstreamPool string          `json:"upstream_pool"`
 }
 
@@ -97,59 +99,34 @@ func buildProxyConfigViews(configs []proxyconfig.LoadedConfig) []ProxyConfigView
 func buildProxyRouteViews(routes []proxyconfig.RouteConfig) []ProxyRouteView {
 	views := make([]ProxyRouteView, 0, len(routes))
 	for _, item := range routes {
-		view := ProxyRouteView{
-			ID:           item.ID,
-			Enabled:      item.Enabled,
-			Hosts:        append([]string(nil), item.Match.Hosts...),
-			UpstreamPool: item.UpstreamPool,
-		}
-		if item.Match.Path != nil {
-			view.Path = &PathMatchView{
-				Type:  string(item.Match.Path.Type),
-				Value: item.Match.Path.Value,
-			}
-		}
-		views = append(views, view)
+		views = append(views, buildProxyRouteView(item))
 	}
-
 	return views
 }
 
 func buildProxyPoolViews(pools map[string]proxyconfig.UpstreamPool) []ProxyPoolView {
-	ids := make([]string, 0, len(pools))
-	for id := range pools {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-
+	ids := sortedPoolIDs(pools)
 	views := make([]ProxyPoolView, 0, len(ids))
 	for _, id := range ids {
-		pool := pools[id]
-		views = append(views, ProxyPoolView{
-			ID:          id,
-			Upstreams:   append([]string(nil), pool.Upstreams...),
-			HealthCheck: pool.HealthCheck,
-		})
+		views = append(views, buildProxyPoolView(id, pools[id]))
 	}
-
 	return views
 }
 
 func buildRouteViews(routes []route.Route) []RouteView {
 	views := make([]RouteView, 0, len(routes))
 	for _, item := range routes {
-		views = append(views, RouteView{
-			GlobalID:     item.GlobalID,
-			LocalID:      item.LocalID,
-			Source:       item.Source,
-			Enabled:      item.Enabled,
-			Hosts:        append([]string(nil), item.Hosts...),
-			Path:         buildPathMatcherView(item.Path),
-			UpstreamPool: item.UpstreamPool,
-		})
+		views = append(views, buildRouteView(item))
+	}
+	return views
+}
+
+func routeAlgorithmString(algorithm proxyconfig.RouteAlgorithm) string {
+	if algorithm == "" {
+		return string(proxyconfig.RouteAlgorithmRoundRobin)
 	}
 
-	return views
+	return string(algorithm)
 }
 
 func buildPathMatcherView(path route.PathMatcher) PathMatcherView {
@@ -178,27 +155,84 @@ func buildUpstreamViews(registry *upstream.Registry) []UpstreamPoolView {
 	if registry == nil {
 		return nil
 	}
+	pools := sortedUpstreamPools(registry.All())
+	views := make([]UpstreamPoolView, 0, len(pools))
+	for _, pool := range pools {
+		views = append(views, buildUpstreamView(pool))
+	}
+	return views
+}
 
-	pools := registry.All()
+func buildProxyRouteView(item proxyconfig.RouteConfig) ProxyRouteView {
+	view := ProxyRouteView{
+		ID:           item.ID,
+		Enabled:      item.Enabled,
+		Hosts:        append([]string(nil), item.Match.Hosts...),
+		Algorithm:    routeAlgorithmString(item.Algorithm),
+		UpstreamPool: item.UpstreamPool,
+	}
+	view.Path = buildPathMatchView(item.Match.Path)
+	return view
+}
+
+func buildPathMatchView(path *proxyconfig.PathMatchConfig) *PathMatchView {
+	if path == nil {
+		return nil
+	}
+	return &PathMatchView{Type: string(path.Type), Value: path.Value}
+}
+
+func sortedPoolIDs(pools map[string]proxyconfig.UpstreamPool) []string {
+	ids := make([]string, 0, len(pools))
+	for id := range pools {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func buildProxyPoolView(id string, pool proxyconfig.UpstreamPool) ProxyPoolView {
+	return ProxyPoolView{
+		ID:          id,
+		Upstreams:   append([]string(nil), pool.Upstreams...),
+		HealthCheck: pool.HealthCheck,
+	}
+}
+
+func buildRouteView(item route.Route) RouteView {
+	return RouteView{
+		GlobalID:     item.GlobalID,
+		LocalID:      item.LocalID,
+		Source:       item.Source,
+		Enabled:      item.Enabled,
+		Hosts:        append([]string(nil), item.Hosts...),
+		Path:         buildPathMatcherView(item.Path),
+		Algorithm:    item.Algorithm,
+		UpstreamPool: item.UpstreamPool,
+	}
+}
+
+func sortedUpstreamPools(pools []*upstream.Pool) []*upstream.Pool {
 	sort.Slice(pools, func(i, j int) bool {
 		return pools[i].GlobalID < pools[j].GlobalID
 	})
+	return pools
+}
 
-	views := make([]UpstreamPoolView, 0, len(pools))
-	for _, pool := range pools {
-		targets := make([]string, 0, len(pool.Targets))
-		for _, target := range pool.Targets {
-			targets = append(targets, target.Raw)
-		}
-
-		views = append(views, UpstreamPoolView{
-			GlobalID:    pool.GlobalID,
-			LocalID:     pool.LocalID,
-			Source:      pool.Source,
-			Targets:     targets,
-			HealthCheck: pool.HealthCheck,
-		})
+func buildUpstreamView(pool *upstream.Pool) UpstreamPoolView {
+	return UpstreamPoolView{
+		GlobalID:    pool.GlobalID,
+		LocalID:     pool.LocalID,
+		Source:      pool.Source,
+		Targets:     targetRaws(pool.Targets),
+		HealthCheck: pool.HealthCheck,
 	}
+}
 
-	return views
+func targetRaws(targets []upstream.Target) []string {
+	raws := make([]string, 0, len(targets))
+	for _, target := range targets {
+		raws = append(raws, target.Raw)
+	}
+	return raws
 }

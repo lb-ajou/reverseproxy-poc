@@ -201,15 +201,16 @@ function_length_exception_allowed() {
 approved_files_contains() {
   local task_file="$1"
   local candidate="$2"
-  perl -ne '
-    if (/Approved-Files:\s*(.+)$/) {
+  perl -e '
+    my ($candidate, $task_file) = @ARGV;
+    open my $fh, "<", $task_file or exit 1;
+    while (my $line = <$fh>) {
+      next unless $line =~ /Approved-Files:\s*(.+)$/;
       my @items = map { s/^\s+|\s+$//gr } split /,/, $1;
-      for my $item (@items) {
-        exit 0 if $item eq $ARGV[0];
-      }
+      exit 0 if grep { $_ eq $candidate } @items;
       exit 1;
     }
-    END { exit 1 }
+    exit 1;
   ' "$candidate" "$task_file"
 }
 
