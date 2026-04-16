@@ -3,6 +3,7 @@ package proxy
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -104,6 +105,9 @@ func (h *Handler) selectTarget(w http.ResponseWriter, r *http.Request, matchedRo
 	if pool == nil {
 		return upstream.Target{}, false
 	}
+	if usesTupleHash(matchedRoute) {
+		return h.selectTupleHashTarget(r, pool)
+	}
 	if !usesStickyCookie(matchedRoute) {
 		return pool.NextTarget()
 	}
@@ -117,6 +121,95 @@ func stickyCookieName(matchedRoute route.Route) string {
 
 func usesStickyCookie(matchedRoute route.Route) bool {
 	return matchedRoute.Algorithm == string(proxyconfig.RouteAlgorithmStickyCookie)
+}
+
+func usesTupleHash(matchedRoute route.Route) bool {
+	return matchedRoute.Algorithm == string(proxyconfig.RouteAlgorithmFiveTupleHash)
+}
+
+func (h *Handler) selectTupleHashTarget(r *http.Request, pool *upstream.Pool) (upstream.Target, bool) {
+	return pool.HashTarget(tupleHashKey(r))
+}
+
+func tupleHashKey(r *http.Request) string {
+	clientHost, clientPort := trustedClientAddress(r)
+	dstHost, dstPort := requestDestination(r)
+	return strings.Join([]string{r.Proto, clientHost, clientPort, dstHost, dstPort}, "|")
+}
+
+func trustedClientAddress(r *http.Request) (string, string) {
+	if host := forwardedClientAddress(r); host != "" {
+		return host, ""
+	}
+	return splitHostPort(r.RemoteAddr)
+}
+
+func forwardedClientAddress(r *http.Request) string {
+	if host := forwardedHeaderAddress(r.Header.Get("Forwarded")); host != "" {
+		return host
+	}
+	return firstForwardedFor(r.Header.Get("X-Forwarded-For"))
+}
+
+func forwardedHeaderAddress(value string) string {
+	for _, part := range strings.Split(value, ",") {
+		if host := forwardedPairHost(part); host != "" {
+			return host
+		}
+	}
+	return ""
+}
+
+func forwardedPairHost(value string) string {
+	for _, item := range strings.Split(value, ";") {
+		name, raw, ok := strings.Cut(strings.TrimSpace(item), "=")
+		if ok && strings.EqualFold(name, "for") {
+			return cleanForwardedHost(raw)
+		}
+	}
+	return ""
+}
+
+func cleanForwardedHost(value string) string {
+	host := strings.Trim(strings.TrimSpace(value), "\"")
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	if strings.HasPrefix(strings.ToLower(host), "_") {
+		return ""
+	}
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		return parsedHost
+	}
+	return strings.TrimPrefix(host, ":")
+}
+
+func firstForwardedFor(value string) string {
+	host := strings.TrimSpace(strings.Split(value, ",")[0])
+	if host == "" {
+		return ""
+	}
+	return cleanForwardedHost(host)
+}
+
+func requestDestination(r *http.Request) (string, string) {
+	if host, port, err := net.SplitHostPort(r.Host); err == nil {
+		return host, port
+	}
+	return r.Host, defaultPort(r)
+}
+
+func defaultPort(r *http.Request) string {
+	if strings.HasPrefix(strings.ToUpper(r.Proto), "HTTP/") {
+		return "80"
+	}
+	return ""
+}
+
+func splitHostPort(value string) (string, string) {
+	if host, port, err := net.SplitHostPort(value); err == nil {
+		return host, port
+	}
+	return value, ""
 }
 
 func (h *Handler) selectStickyTarget(w http.ResponseWriter, r *http.Request, matchedRoute route.Route, pool *upstream.Pool) (upstream.Target, bool) {

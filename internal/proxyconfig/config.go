@@ -19,8 +19,9 @@ type RouteConfig struct {
 type RouteAlgorithm string
 
 const (
-	RouteAlgorithmRoundRobin   RouteAlgorithm = "round_robin"
-	RouteAlgorithmStickyCookie RouteAlgorithm = "sticky_cookie"
+	RouteAlgorithmRoundRobin    RouteAlgorithm = "round_robin"
+	RouteAlgorithmStickyCookie  RouteAlgorithm = "sticky_cookie"
+	RouteAlgorithmFiveTupleHash RouteAlgorithm = "5_tuple_hash"
 )
 
 type RouteMatchConfig struct {

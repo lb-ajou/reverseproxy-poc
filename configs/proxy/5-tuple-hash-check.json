@@ -1,0 +1,33 @@
+{
+  "name": "5-tuple-hash-check",
+  "routes": [
+    {
+      "id": "r-5-tuple-hash",
+      "enabled": true,
+      "algorithm": "5_tuple_hash",
+      "match": {
+        "hosts": ["tuple.localtest.me"],
+        "path": {
+          "type": "prefix",
+          "value": "/"
+        }
+      },
+      "upstream_pool": "pool-tuple"
+    }
+  ],
+  "upstream_pools": {
+    "pool-tuple": {
+      "upstreams": [
+        "127.0.0.1:18581",
+        "127.0.0.1:18582",
+        "127.0.0.1:18583"
+      ],
+      "health_check": {
+        "path": "/health",
+        "interval": "5s",
+        "timeout": "2s",
+        "expect_status": 200
+      }
+    }
+  }
+}

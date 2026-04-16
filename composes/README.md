@@ -23,6 +23,8 @@
   - round-robin 분산을 자동 스크립트로 검증하는 시나리오
 - `sticky-cookie-check`
   - sticky cookie 기반 라우팅을 실제 cookie jar로 검증하는 시나리오
+- `5-tuple-hash-check`
+  - `X-Forwarded-For` 기반 5-tuple hash 라우팅을 검증하는 시나리오
 
 ## 실행 예시
 

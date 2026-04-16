@@ -147,6 +147,53 @@ func TestHandlerServeHTTP_StickyCookieSetsCookieAndReusesTarget(t *testing.T) {
 	}
 }
 
+func newFiveTupleHandler(t *testing.T) http.Handler {
+	t.Helper()
+	serverA := newJSONServer(`{"server":"a"}`)
+	t.Cleanup(serverA.Close)
+	serverB := newJSONServer(`{"server":"b"}`)
+	t.Cleanup(serverB.Close)
+	registry := newRegistry(t, serverA.Listener.Addr().String(), serverB.Listener.Addr().String())
+	return newProxyHandler([]route.Route{newTestRoute("5_tuple_hash")}, registry)
+}
+
+func newFiveTupleRequest(remoteAddr string) *httptest.Request {
+	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/api/info", nil)
+	req.RemoteAddr = remoteAddr
+	return req
+}
+
+func responseBody(t *testing.T, handler http.Handler, req *http.Request) string {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return requireBody(t, rec.Result().Body)
+}
+
+func TestHandlerServeHTTP_FiveTupleHashReusesTargetFromForwardedHeaders(t *testing.T) {
+	handler := newFiveTupleHandler(t)
+	firstReq := newFiveTupleRequest("10.0.0.20:34567")
+	firstReq.Header.Set("X-Forwarded-For", "203.0.113.10")
+	secondReq := newFiveTupleRequest("10.0.0.30:45678")
+	secondReq.Header.Set("X-Forwarded-For", "203.0.113.10")
+	requireSameBody(t, handler, firstReq, secondReq, "5_tuple_hash response")
+}
+
+func TestHandlerServeHTTP_FiveTupleHashFallsBackToRemoteAddr(t *testing.T) {
+	handler := newFiveTupleHandler(t)
+	req := newFiveTupleRequest("203.0.113.10:34567")
+	requireSameBody(t, handler, req.Clone(req.Context()), req, "5_tuple_hash remote addr")
+}
+
+func TestHandlerServeHTTP_FiveTupleHashSkipsUnhealthyTargets(t *testing.T) {
+	registry := fiveTupleRegistry(t)
+	markTargetUnhealthy(t, registry, 0, "down")
+	handler := newProxyHandler([]route.Route{newTestRoute("5_tuple_hash")}, registry)
+	req := newFiveTupleRequest("")
+	req.Header.Set("Forwarded", "for=203.0.113.10")
+	requireBodyEquals(t, handler, req, `{"server":"b"}`)
+}
+
 func TestFindHealthyTarget_ReturnsFalseForUnhealthyTarget(t *testing.T) {
 	pool := &upstream.Pool{
 		Targets: []upstream.Target{
@@ -159,4 +206,50 @@ func TestFindHealthyTarget_ReturnsFalseForUnhealthyTarget(t *testing.T) {
 	if _, ok := findHealthyTarget(pool, "127.0.0.1:18082"); ok {
 		t.Fatal("findHealthyTarget() returned unhealthy target")
 	}
+}
+
+func TestTrustedClientAddress_PrefersForwardedHeaders(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/api/info", nil)
+	req.RemoteAddr = "10.0.0.20:34567"
+	req.Header.Set("Forwarded", "for=198.51.100.2:1234")
+
+	host, port := trustedClientAddress(req)
+
+	if host != "198.51.100.2" || port != "" {
+		t.Fatalf("trustedClientAddress() = %q, %q", host, port)
+	}
+}
+
+func requireSameBody(t *testing.T, handler http.Handler, firstReq, secondReq *http.Request, label string) {
+	t.Helper()
+	firstBody := responseBody(t, handler, firstReq)
+	secondBody := responseBody(t, handler, secondReq)
+	if firstBody != secondBody {
+		t.Fatalf("%s mismatch: %q != %q", label, firstBody, secondBody)
+	}
+}
+
+func requireBodyEquals(t *testing.T, handler http.Handler, req *http.Request, want string) {
+	t.Helper()
+	if got := responseBody(t, handler, req); got != want {
+		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func fiveTupleRegistry(t *testing.T) *upstream.Registry {
+	t.Helper()
+	serverA := newJSONServer(`{"server":"a"}`)
+	t.Cleanup(serverA.Close)
+	serverB := newJSONServer(`{"server":"b"}`)
+	t.Cleanup(serverB.Close)
+	return newRegistry(t, serverA.Listener.Addr().String(), serverB.Listener.Addr().String())
+}
+
+func markTargetUnhealthy(t *testing.T, registry *upstream.Registry, index int, reason string) {
+	t.Helper()
+	pool, ok := registry.Get("default:pool-api")
+	if !ok {
+		t.Fatal("registry.Get() returned no pool")
+	}
+	pool.SetTargetUnhealthy(index, time.Now(), reason)
 }

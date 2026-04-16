@@ -134,10 +134,16 @@ func validateRouteHost(base string, index int, host string) []ValidationError {
 }
 
 func validateRouteAlgorithm(base string, algorithm RouteAlgorithm) []ValidationError {
-	if algorithm == "" || algorithm == RouteAlgorithmRoundRobin || algorithm == RouteAlgorithmStickyCookie {
+	if algorithm == "" || isValidRouteAlgorithm(algorithm) {
 		return nil
 	}
-	return []ValidationError{{Field: base + ".algorithm", Message: "algorithm must be one of: round_robin, sticky_cookie"}}
+	return []ValidationError{{Field: base + ".algorithm", Message: "algorithm must be one of: round_robin, sticky_cookie, 5_tuple_hash"}}
+}
+
+func isValidRouteAlgorithm(algorithm RouteAlgorithm) bool {
+	return algorithm == RouteAlgorithmRoundRobin ||
+		algorithm == RouteAlgorithmStickyCookie ||
+		algorithm == RouteAlgorithmFiveTupleHash
 }
 
 func validateRouteUpstreamPool(base, poolID string, poolIDs map[string]struct{}) []ValidationError {
