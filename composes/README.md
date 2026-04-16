@@ -19,6 +19,8 @@
   - 같은 역할의 여러 서버를 하나의 upstream pool로 묶는 시나리오
 - `failure-healthcheck`
   - 일부 서버가 `/health`에서 실패하는 상태를 재현하는 시나리오
+- `round-robin-check`
+  - round-robin 분산을 자동 스크립트로 검증하는 시나리오
 
 ## 실행 예시
 
