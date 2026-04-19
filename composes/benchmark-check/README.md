@@ -44,6 +44,44 @@ curl -s http://localhost:18881/api/info
 
 모든 스크립트의 기본 결과 경로는 `plan/benchmarks/<tool>-<timestamp>/`다.
 
+## 5회 반복 측정
+
+단일 측정으로 결론을 내리지 않으려면 `tools/benchmark-matrix.sh`를 기본 진입점으로 사용한다.
+
+```bash
+tools/benchmark-matrix.sh
+```
+
+기본 동작:
+
+- 대상 프록시 `proxy`, `caddy`, `nginx`, `haproxy`
+- 벤치마크 도구 `wrk`, `vegeta`, `k6`
+- 각 조합 `5회` 반복 측정
+- 각 반복마다 `tools/benchmark-stats.sh`를 함께 실행
+- 결과 세션 디렉토리 아래에 `manifest.csv`, raw 결과, `summary/summary.csv`, `summary/summary.md` 생성
+
+주요 환경변수:
+
+- `BENCHMARK_REPEATS=5`
+- `BENCHMARK_MATRIX_TARGETS=proxy,caddy`
+- `BENCHMARK_MATRIX_TOOLS=wrk,vegeta`
+- `BENCHMARK_SESSION_NAME=report-baseline`
+- `BENCHMARK_WRK_ARGS="30s 4 50,100,200,400"`
+- `BENCHMARK_VEGETA_ARGS="300,600,900,1200 60s"`
+- `BENCHMARK_K6_ARGS="30s 60s 30s 1200"`
+
+예시:
+
+```bash
+BENCHMARK_SESSION_NAME=baseline-20260419 tools/benchmark-matrix.sh
+```
+
+이미 측정이 끝난 세션을 다시 요약하려면 아래 명령을 사용한다.
+
+```bash
+tools/benchmark-summary.sh plan/benchmarks/baseline-20260419
+```
+
 ## 예시
 
 ```bash

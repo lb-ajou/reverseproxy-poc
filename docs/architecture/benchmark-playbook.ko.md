@@ -87,6 +87,43 @@ BENCHMARK_TARGET=haproxy tools/benchmark-k6.sh 30s 60s 30s 1600
 wait
 ```
 
+## 반복 측정 기본 원칙
+
+- 각 비교군 x 각 벤치마크 조합은 `1회`가 아니라 `5회` 반복 측정을 기본으로 한다.
+- 5회 중 일부 수치가 튄다고 해도 바로 제외하지 않고, 먼저 환경 흔들림인지 실제 불안정성인지 구분한다.
+- 최종 비교는 단일 최고값이 아니라 `중앙값`, `평균`, `최소/최대`, `error rate`를 함께 본다.
+- 보고서 본문에는 대표값으로 `median`, 부록이나 상세 표에는 `all 5 runs`와 `avg/min/max`를 함께 남긴다.
+
+반복 측정 자동화는 아래 명령을 기본 경로로 사용한다.
+
+```bash
+tools/benchmark-matrix.sh
+```
+
+이 스크립트는 기본적으로 아래 조합을 수행한다.
+
+- 대상: `proxy`, `caddy`, `nginx`, `haproxy`
+- 도구: `wrk`, `vegeta`, `k6`
+- 반복 수: `5`
+- 산출물: 세션 디렉토리 아래 `manifest.csv`, 각 반복 raw 결과, `summary/raw-results.csv`, `summary/summary.csv`, `summary/summary.md`
+
+예시:
+
+```bash
+BENCHMARK_SESSION_NAME=baseline-20260419 tools/benchmark-matrix.sh
+```
+
+이미 저장된 세션을 다시 집계할 때는 아래 명령을 사용한다.
+
+```bash
+tools/benchmark-summary.sh plan/benchmarks/baseline-20260419
+```
+
+실제 반복 측정 예시는 아래 문서를 참고한다.
+
+- `docs/architecture/benchmark-session-2026-04-19.ko.md`
+- `docs/architecture/rps-scenarios.ko.md`
+
 ## 결과 정리 기준
 
 결과 비교 표는 아래 열을 기본으로 둔다.
@@ -103,6 +140,89 @@ wait
 - avg memory
 - peak memory
 - notes
+
+반복 측정 표는 아래 두 단계로 나눠 보관한다.
+
+1. raw table
+
+- repeat
+- target
+- tool
+- scenario
+- actual rps
+- avg latency
+- p95
+- p99
+- max latency
+- error rate
+- success rate
+- dropped iterations
+- avg cpu
+- peak cpu
+- avg memory
+- peak memory
+
+2. summary table
+
+- target
+- tool
+- scenario
+- actual rps count
+- actual rps avg
+- actual rps median
+- actual rps min
+- actual rps max
+- p95 avg
+- p95 median
+- error avg
+- error max
+- avg cpu avg
+- avg memory avg
+
+## 보고서 작성용 해석 가이드
+
+보고서에서는 아래 순서로 판단하는 편이 안전하다.
+
+1. 안정성 먼저
+
+- `error rate`, `success rate`, `dropped iterations`가 불안정하면 해당 조합은 최고 처리량이 높아도 우선순위를 낮춘다.
+- 특히 `k6`에서 dropped iteration이 반복되면 운영형 burst 대응력이 부족하다고 본다.
+
+2. 대표값은 중앙값 우선
+
+- `5회` 중 최고값 하나만 인용하지 않는다.
+- `actual_rps_median`, `p95_median`을 본문 대표값으로 사용하고, `avg/min/max`는 변동성 설명에 사용한다.
+- `avg`와 `median` 차이가 크면 환경 잡음 또는 내부 불안정성 가능성을 같이 적는다.
+
+3. 벤치마크별 판정 질문을 분리
+
+- `wrk`: 어디서 포화되고 headroom이 얼마나 남는가
+- `vegeta`: 목표 RPS를 안정적으로 유지하는가
+- `k6`: 램프업과 스파이크에서 SLA가 무너지는가
+- `docker stats`: 같은 성능을 내기 위해 CPU/메모리를 얼마나 쓰는가
+
+4. 변동성 자체도 결과로 본다
+
+- 같은 조합에서 `min-max` 폭이 크면 운영 안정성이 낮다고 기록한다.
+- 평균이 좋아도 특정 반복에서만 심하게 무너지면 "조건부 우수"가 아니라 "재현성 부족"으로 적는다.
+
+5. 최종 결론은 한 줄 비교가 아니라 두 축 비교로 쓴다
+
+- 성능 축: `throughput`, `p95/p99`, 포화 지점
+- 운영 축: `error rate`, spike 안정성, CPU/메모리 비용
+
+권장 서술 예시:
+
+- `HAProxy`는 최대 처리량 headroom이 가장 컸지만, 본 실험 배치에서는 `vegeta 900` 변동성이 상대적으로 컸다.
+- `Caddy`는 고정 RPS 안정성이 좋았고 반복 간 편차도 작아 운영형 기본값으로 해석하기 쉬웠다.
+- `reverseproxy`는 최고치보다 `median`과 `p95` 개선 여부를 중심으로 추적해야 한다.
+
+## 이상치 판단 기준
+
+- 컨테이너 재기동, 호스트 부하 급증, 네트워크 오류처럼 외부 이벤트가 확인되면 해당 run을 별도 표시하고 재측정한다.
+- 외부 이벤트가 없는데도 특정 비교군만 반복적으로 튄다면 그것은 제거 대상이 아니라 결과 본문에 포함할 불안정성 신호다.
+- `wrk`는 순간 포화 탐색 성격이 강하므로 단건 최고값보다 반복 간 `RPS` 분산과 timeout 존재 여부를 더 중요하게 본다.
+- `vegeta`, `k6`는 성공률이 무너지면 throughput 수치를 낮게 평가한다.
 
 ## 현재 시나리오 특성
 
