@@ -125,6 +125,23 @@ func TestHandlerServeHTTP_ReturnsNotFoundWhenNoRouteMatches(t *testing.T) {
 	}
 }
 
+func TestNewHandler_UsesTunedTransport(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}))
+	proxyHandler, ok := handler.(*Handler)
+	if !ok {
+		t.Fatalf("handler type = %T, want *Handler", handler)
+	}
+	if proxyHandler.transport == http.DefaultTransport {
+		t.Fatal("transport reused http.DefaultTransport")
+	}
+	requireTransportDefaults(t, proxyHandler.transport)
+}
+
+func TestNewTransport_AppliesConfiguredLimits(t *testing.T) {
+	transport := newTransport()
+	requireTransportDefaults(t, transport)
+}
+
 func TestHandlerServeHTTP_ReturnsBadGatewayWhenNoHealthyTargets(t *testing.T) {
 	registry := newRegistry(t, "10.0.0.11:8080", "10.0.0.12:8080")
 	markAllTargetsUnhealthy(t, registry)
@@ -261,6 +278,39 @@ func requireBodyEquals(t *testing.T, handler http.Handler, req *http.Request, wa
 	t.Helper()
 	if got := responseBody(t, handler, req); got != want {
 		t.Fatalf("body = %q, want %q", got, want)
+	}
+}
+
+func requireTransportDefaults(t *testing.T, transport *http.Transport) {
+	t.Helper()
+	cfg := defaultTransportConfig()
+	requireTransportConnectionLimits(t, transport, cfg)
+	requireTransportTimeouts(t, transport, cfg)
+}
+
+func requireTransportConnectionLimits(t *testing.T, transport *http.Transport, cfg transportConfig) {
+	t.Helper()
+	if transport.MaxIdleConns != cfg.maxIdleConns {
+		t.Fatalf("MaxIdleConns = %d, want %d", transport.MaxIdleConns, cfg.maxIdleConns)
+	}
+	if transport.MaxIdleConnsPerHost != cfg.maxIdleConnsPerHost {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want %d", transport.MaxIdleConnsPerHost, cfg.maxIdleConnsPerHost)
+	}
+	if transport.MaxConnsPerHost != cfg.maxConnsPerHost {
+		t.Fatalf("MaxConnsPerHost = %d, want %d", transport.MaxConnsPerHost, cfg.maxConnsPerHost)
+	}
+}
+
+func requireTransportTimeouts(t *testing.T, transport *http.Transport, cfg transportConfig) {
+	t.Helper()
+	if transport.IdleConnTimeout != cfg.idleConnTimeout {
+		t.Fatalf("IdleConnTimeout = %s, want %s", transport.IdleConnTimeout, cfg.idleConnTimeout)
+	}
+	if transport.ResponseHeaderTimeout != cfg.responseHeaderWait {
+		t.Fatalf("ResponseHeaderTimeout = %s, want %s", transport.ResponseHeaderTimeout, cfg.responseHeaderWait)
+	}
+	if transport.DialContext == nil {
+		t.Fatal("DialContext is nil")
 	}
 }
 

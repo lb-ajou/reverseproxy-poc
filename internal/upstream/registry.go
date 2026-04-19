@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -29,20 +30,58 @@ func (r *Registry) addPool(pool Pool) error {
 	if _, exists := r.pools[pool.GlobalID]; exists {
 		return fmt.Errorf("duplicate upstream pool %q", pool.GlobalID)
 	}
-	r.pools[pool.GlobalID] = copyPool(pool)
+	poolCopy, err := copyPool(pool)
+	if err != nil {
+		return err
+	}
+	r.pools[pool.GlobalID] = poolCopy
 	return nil
 }
 
-func copyPool(pool Pool) *Pool {
+func copyPool(pool Pool) (*Pool, error) {
 	poolCopy := pool
+	prepareTargets(&poolCopy)
+	if err := parseTargetURLs(&poolCopy); err != nil {
+		return nil, err
+	}
+	ensureTargetStates(&poolCopy)
 	ensureActiveCounters(&poolCopy)
-	return &poolCopy
+	poolCopy.storeHealthyIndexesLocked()
+	return &poolCopy, nil
 }
 
 func ensureActiveCounters(pool *Pool) {
 	if len(pool.active) != len(pool.Targets) {
 		pool.active = make([]uint64, len(pool.Targets))
 	}
+}
+
+func prepareTargets(pool *Pool) {
+	targets := make([]Target, len(pool.Targets))
+	copy(targets, pool.Targets)
+	pool.Targets = targets
+}
+
+func parseTargetURLs(pool *Pool) error {
+	for i := range pool.Targets {
+		parsed, err := url.Parse("http://" + pool.Targets[i].Raw)
+		if err != nil {
+			return fmt.Errorf("parse upstream target %q: %w", pool.Targets[i].Raw, err)
+		}
+		pool.Targets[i].URL = parsed
+	}
+	return nil
+}
+
+func ensureTargetStates(pool *Pool) {
+	states := make([]TargetState, len(pool.Targets))
+	for i := range pool.Targets {
+		states[i] = TargetState{Healthy: true}
+		if i < len(pool.targetState) {
+			states[i] = pool.targetState[i]
+		}
+	}
+	pool.targetState = states
 }
 
 func (r *Registry) Get(globalID string) (*Pool, bool) {

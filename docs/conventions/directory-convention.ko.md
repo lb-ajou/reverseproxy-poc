@@ -314,6 +314,7 @@ runtime upstream registry와 balancing을 담당한다.
 - route table 기준 route resolve
 - upstream target 선택
 - 선택된 upstream으로 요청 전달
+- reverse proxy 인스턴스와 upstream transport pool 생성 및 재사용
 
 중요한 경계:
 

@@ -38,16 +38,12 @@ func (p *Pool) LeastConnectionTarget() (Target, func(), bool) {
 }
 
 func (p *Pool) healthyTargetIndexes() []int {
+	if indexes, ok := p.cachedHealthyIndexes(); ok {
+		return indexes
+	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-
-	healthyIndexes := make([]int, 0, len(p.targetState))
-	for i := range p.Targets {
-		if i >= len(p.targetState) || p.targetState[i].Healthy {
-			healthyIndexes = append(healthyIndexes, i)
-		}
-	}
-	return healthyIndexes
+	return collectHealthyIndexes(p.Targets, p.targetState)
 }
 
 func (p *Pool) leastConnectionIndex(healthyIndexes []int) (int, bool) {

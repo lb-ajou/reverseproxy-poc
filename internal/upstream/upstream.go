@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,7 @@ type Pool struct {
 	mu          sync.RWMutex
 	targetState []TargetState
 	active      []uint64
+	healthy     atomic.Value
 	next        uint64
 }
 
@@ -27,6 +29,7 @@ func (p *Pool) ActiveConnections(index int) uint64 {
 
 type Target struct {
 	Raw string
+	URL *url.URL
 }
 
 type TargetState struct {
@@ -52,17 +55,7 @@ func (p *Pool) SnapshotStates() []TargetState {
 func (p *Pool) SetTargetHealthy(index int, checkedAt time.Time) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	if index < 0 || index >= len(p.targetState) {
-		return false
-	}
-
-	p.targetState[index] = TargetState{
-		Healthy:       true,
-		LastCheckedAt: checkedAt,
-	}
-
-	return true
+	return p.setTargetState(index, checkedAt, "", true)
 }
 
 func (p *Pool) SetTargetUnhealthy(index int, checkedAt time.Time, lastErr string) bool {
@@ -72,6 +65,7 @@ func (p *Pool) SetTargetUnhealthy(index int, checkedAt time.Time, lastErr string
 }
 
 func (p *Pool) setTargetState(index int, checkedAt time.Time, lastErr string, healthy bool) bool {
+	p.ensureTargetStatesLocked()
 	if index < 0 || index >= len(p.targetState) {
 		return false
 	}
@@ -80,5 +74,43 @@ func (p *Pool) setTargetState(index int, checkedAt time.Time, lastErr string, he
 		LastCheckedAt: checkedAt,
 		LastError:     lastErr,
 	}
+	p.storeHealthyIndexesLocked()
 	return true
+}
+
+func (p *Pool) ensureTargetStatesLocked() {
+	if len(p.targetState) == len(p.Targets) {
+		return
+	}
+	states := make([]TargetState, len(p.Targets))
+	for i := range p.Targets {
+		states[i] = TargetState{Healthy: true}
+		if i < len(p.targetState) {
+			states[i] = p.targetState[i]
+		}
+	}
+	p.targetState = states
+}
+
+func (p *Pool) cachedHealthyIndexes() ([]int, bool) {
+	value := p.healthy.Load()
+	if value == nil {
+		return nil, false
+	}
+	indexes, ok := value.([]int)
+	return indexes, ok
+}
+
+func (p *Pool) storeHealthyIndexesLocked() {
+	p.healthy.Store(collectHealthyIndexes(p.Targets, p.targetState))
+}
+
+func collectHealthyIndexes(targets []Target, states []TargetState) []int {
+	indexes := make([]int, 0, len(targets))
+	for i := range targets {
+		if i >= len(states) || states[i].Healthy {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
 }

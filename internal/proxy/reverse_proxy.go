@@ -8,6 +8,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 
 	"reverseproxy-poc/internal/proxyconfig"
 	"reverseproxy-poc/internal/route"
@@ -17,13 +18,14 @@ import (
 
 type Handler struct {
 	state     *runtime.State
-	transport http.RoundTripper
+	transport *http.Transport
+	proxies   sync.Map
 }
 
 func NewHandler(state *runtime.State) http.Handler {
 	return &Handler{
 		state:     state,
-		transport: http.DefaultTransport,
+		transport: newTransport(),
 	}
 }
 
@@ -84,22 +86,57 @@ func (h *Handler) resolvePool(w http.ResponseWriter, registry *upstream.Registry
 }
 
 func (h *Handler) serveProxyToTarget(w http.ResponseWriter, r *http.Request, target upstream.Target) {
-	targetURL, err := upstreamURL(target.Raw)
+	proxy, err := h.proxyForTarget(target)
 	if err != nil {
 		http.Error(w, "invalid upstream target", http.StatusBadGateway)
 		return
 	}
-
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	proxy.Transport = h.transport
-	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, proxyErr error) {
-		http.Error(rw, fmt.Sprintf("proxy upstream error: %v", proxyErr), http.StatusBadGateway)
-	}
 	proxy.ServeHTTP(w, r)
 }
 
-func upstreamURL(raw string) (*url.URL, error) {
-	return url.Parse("http://" + raw)
+func (h *Handler) proxyForTarget(target upstream.Target) (*httputil.ReverseProxy, error) {
+	if proxy, ok := h.cachedProxy(target.Raw); ok {
+		return proxy, nil
+	}
+	targetURL, err := upstreamURL(target)
+	if err != nil {
+		return nil, err
+	}
+	return h.storeProxy(target.Raw, h.newReverseProxy(targetURL)), nil
+}
+
+func (h *Handler) cachedProxy(raw string) (*httputil.ReverseProxy, bool) {
+	value, ok := h.proxies.Load(raw)
+	if !ok {
+		return nil, false
+	}
+	proxy, ok := value.(*httputil.ReverseProxy)
+	return proxy, ok
+}
+
+func upstreamURL(target upstream.Target) (*url.URL, error) {
+	if target.URL == nil {
+		return nil, errors.New("missing target url")
+	}
+	return target.URL, nil
+}
+
+func (h *Handler) storeProxy(raw string, proxy *httputil.ReverseProxy) *httputil.ReverseProxy {
+	actual, _ := h.proxies.LoadOrStore(raw, proxy)
+	return actual.(*httputil.ReverseProxy)
+}
+
+func (h *Handler) newReverseProxy(targetURL *url.URL) *httputil.ReverseProxy {
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.Transport = h.transport
+	proxy.ErrorHandler = newErrorHandler()
+	return proxy
+}
+
+func newErrorHandler() func(http.ResponseWriter, *http.Request, error) {
+	return func(rw http.ResponseWriter, _ *http.Request, proxyErr error) {
+		http.Error(rw, fmt.Sprintf("proxy upstream error: %v", proxyErr), http.StatusBadGateway)
+	}
 }
 
 func (h *Handler) selectTarget(w http.ResponseWriter, r *http.Request, matchedRoute route.Route, pool *upstream.Pool) (upstream.Target, func(), bool) {
