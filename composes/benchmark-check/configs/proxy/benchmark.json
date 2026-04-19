@@ -1,0 +1,33 @@
+{
+  "name": "benchmark-check",
+  "routes": [
+    {
+      "id": "r-benchmark",
+      "enabled": true,
+      "algorithm": "round_robin",
+      "match": {
+        "hosts": ["benchmark.localtest.me"],
+        "path": {
+          "type": "prefix",
+          "value": "/"
+        }
+      },
+      "upstream_pool": "pool-benchmark"
+    }
+  ],
+  "upstream_pools": {
+    "pool-benchmark": {
+      "upstreams": [
+        "backend-a:8080",
+        "backend-b:8080",
+        "backend-c:8080"
+      ],
+      "health_check": {
+        "path": "/health",
+        "interval": "5s",
+        "timeout": "2s",
+        "expect_status": 200
+      }
+    }
+  }
+}
