@@ -148,7 +148,6 @@ services:
 
 networks:
   raft-ha-net:
-    name: raft-ha-cluster-net
 
 volumes:
   proxy-1-raft:

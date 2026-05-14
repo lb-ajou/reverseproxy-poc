@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$REPO_ROOT"
 
 COMPOSE_FILE="composes/raft-ha-cluster/compose.yaml"
-PROJECT_NAME="reverseproxy-raft-ha"
+PROJECT_NAME="${RAFT_HA_PROJECT_NAME:-reverseproxy-raft-ha-$$}"
 OUT_DIR="composes/raft-ha-cluster/.out"
 
 dashboard_url() {
@@ -40,6 +40,33 @@ compose() {
   docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" "$@"
 }
 
+cleanup() {
+  local status=$?
+  trap - EXIT INT TERM
+
+  if [ "${KEEP_RAFT_HA_SMOKE:-0}" = "1" ]; then
+    log "leaving compose environment running for inspection: project=${PROJECT_NAME}"
+  else
+    compose down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+
+  exit "$status"
+}
+
+require_command() {
+  local command_name="$1"
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    fail "required command not found: ${command_name}"
+  fi
+}
+
+check_dependencies() {
+  require_command curl
+  require_command docker
+  require_command go
+  require_command jq
+}
+
 build_binaries() {
   mkdir -p "$OUT_DIR"
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "${OUT_DIR}/reverseproxy" ./main.go
@@ -62,26 +89,43 @@ wait_http() {
   fail "timed out waiting for ${name} at ${url}"
 }
 
-json_contains() {
-  local json="$1"
-  local expected="$2"
-  printf "%s" "$json" | grep -Fq "$expected"
+config_has_route() {
+  local body="$1"
+  local route_id="$2"
+  printf "%s" "$body" | jq -e --arg route_id "$route_id" '.routes[]? | select(.id == $route_id)' >/dev/null
 }
 
-try_config_contains() {
+config_has_pool() {
+  local body="$1"
+  local pool_id="$2"
+  printf "%s" "$body" | jq -e --arg pool_id "$pool_id" '.upstream_pools[$pool_id] != null' >/dev/null
+}
+
+try_config_has_route() {
   local node="$1"
-  local expected="$2"
+  local route_id="$2"
   local url
   url="$(dashboard_url "$node")/api/namespaces/default/config"
 
   local body
   body="$(curl -fsS "$url" 2>/dev/null)" || return 1
-  json_contains "$body" "$expected"
+  config_has_route "$body" "$route_id"
 }
 
-require_config_contains() {
+try_config_has_pool() {
   local node="$1"
-  local expected="$2"
+  local pool_id="$2"
+  local url
+  url="$(dashboard_url "$node")/api/namespaces/default/config"
+
+  local body
+  body="$(curl -fsS "$url" 2>/dev/null)" || return 1
+  config_has_pool "$body" "$pool_id"
+}
+
+require_config_has_route() {
+  local node="$1"
+  local route_id="$2"
   local url
   url="$(dashboard_url "$node")/api/namespaces/default/config"
 
@@ -89,9 +133,25 @@ require_config_contains() {
   if ! body="$(curl -fsS "$url")"; then
     fail "${node} config request failed"
   fi
-  if ! json_contains "$body" "$expected"; then
+  if ! config_has_route "$body" "$route_id"; then
     printf "%s\n" "$body" >&2
-    fail "${node} config does not contain ${expected}"
+    fail "${node} config does not contain route ${route_id}"
+  fi
+}
+
+require_config_has_pool() {
+  local node="$1"
+  local pool_id="$2"
+  local url
+  url="$(dashboard_url "$node")/api/namespaces/default/config"
+
+  local body
+  if ! body="$(curl -fsS "$url")"; then
+    fail "${node} config request failed"
+  fi
+  if ! config_has_pool "$body" "$pool_id"; then
+    printf "%s\n" "$body" >&2
+    fail "${node} config does not contain pool ${pool_id}"
   fi
 }
 
@@ -103,7 +163,7 @@ try_proxy_route() {
 
   local body
   body="$(curl -fsS -H "Host: ${host}" "$url" 2>/dev/null)" || return 1
-  printf "%s" "$body" | grep -Eq '"server":"backend-(a|b|c)"'
+  printf "%s" "$body" | jq -e '.server | test("^backend-[abc]$")' >/dev/null
 }
 
 require_proxy_route() {
@@ -116,7 +176,7 @@ require_proxy_route() {
   if ! body="$(curl -fsS -H "Host: ${host}" "$url")"; then
     fail "${node} request for ${host} failed"
   fi
-  if ! printf "%s" "$body" | grep -Eq '"server":"backend-(a|b|c)"'; then
+  if ! printf "%s" "$body" | jq -e '.server | test("^backend-[abc]$")' >/dev/null; then
     printf "%s\n" "$body" >&2
     fail "${node} did not route ${host} to a backend"
   fi
@@ -159,19 +219,34 @@ create_added_route() {
     }' >/dev/null
 }
 
-wait_config_contains() {
+wait_config_has_route() {
   local node="$1"
-  local expected="$2"
+  local route_id="$2"
   local attempts="${3:-60}"
 
   for _ in $(seq 1 "$attempts"); do
-    if try_config_contains "$node" "$expected"; then
+    if try_config_has_route "$node" "$route_id"; then
       return 0
     fi
     sleep 1
   done
 
-  fail "${node} config did not converge on ${expected}"
+  fail "${node} config did not converge on route ${route_id}"
+}
+
+wait_config_has_pool() {
+  local node="$1"
+  local pool_id="$2"
+  local attempts="${3:-60}"
+
+  for _ in $(seq 1 "$attempts"); do
+    if try_config_has_pool "$node" "$pool_id"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  fail "${node} config did not converge on pool ${pool_id}"
 }
 
 wait_proxy_route() {
@@ -190,6 +265,10 @@ wait_proxy_route() {
 }
 
 main() {
+  trap cleanup EXIT INT TERM
+
+  check_dependencies
+
   log "reset compose environment"
   compose down -v --remove-orphans
 
@@ -202,21 +281,21 @@ main() {
   wait_http "http://localhost:19090/api/namespaces/default/config" "proxy-1 dashboard"
 
   log "verify bootstrap seed on proxy-1"
-  require_config_contains node-1 '"r-raft"'
-  require_config_contains node-1 '"pool-raft"'
+  require_config_has_route node-1 "r-raft"
+  require_config_has_pool node-1 "pool-raft"
   wait_proxy_route node-1 "raft.localtest.me"
 
   log "bootstrap checks passed"
 
   log "start joining nodes"
-  compose up -d proxy-2 proxy-3
+  compose up -d --build proxy-2 proxy-3
 
   wait_http "http://localhost:19091/api/namespaces/default/config" "proxy-2 dashboard"
   wait_http "http://localhost:19092/api/namespaces/default/config" "proxy-3 dashboard"
 
   log "verify joined nodes caught up with seed"
-  wait_config_contains node-2 '"r-raft"'
-  wait_config_contains node-3 '"r-raft"'
+  wait_config_has_route node-2 "r-raft"
+  wait_config_has_route node-3 "r-raft"
   wait_proxy_route node-2 "raft.localtest.me"
   wait_proxy_route node-3 "raft.localtest.me"
 
@@ -225,9 +304,12 @@ main() {
   create_added_route node-1
 
   log "verify replication to all nodes"
-  wait_config_contains node-1 '"r-added"'
-  wait_config_contains node-2 '"r-added"'
-  wait_config_contains node-3 '"r-added"'
+  wait_config_has_route node-1 "r-added"
+  wait_config_has_route node-2 "r-added"
+  wait_config_has_route node-3 "r-added"
+  wait_config_has_pool node-1 "pool-added"
+  wait_config_has_pool node-2 "pool-added"
+  wait_config_has_pool node-3 "pool-added"
   wait_proxy_route node-1 "raft-added.localtest.me"
   wait_proxy_route node-2 "raft-added.localtest.me"
   wait_proxy_route node-3 "raft-added.localtest.me"
