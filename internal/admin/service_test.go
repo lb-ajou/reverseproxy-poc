@@ -145,8 +145,30 @@ func TestCreateUpstreamPoolAndRoute_WritesDefaultNamespace(t *testing.T) {
 		t.Fatal("loaded.Config.UpstreamPools[pool-api] was not written")
 	}
 
-	if got, want := len(testRuntime.Snapshot().ProxyConfigs), 0; got != want {
-		t.Fatalf("len(snapshot.ProxyConfigs) = %d, want %d before runtime reload", got, want)
+	snapshot := testRuntime.Snapshot()
+	if got, want := len(snapshot.ProxyConfigs), 1; got != want {
+		t.Fatalf("len(snapshot.ProxyConfigs) = %d, want %d", got, want)
+	}
+	if got, want := len(snapshot.RouteTable), 1; got != want {
+		t.Fatalf("len(snapshot.RouteTable) = %d, want %d", got, want)
+	}
+	if _, ok := snapshot.Upstreams.Get("default:pool-api"); !ok {
+		t.Fatal("snapshot.Upstreams.Get(default:pool-api) returned no pool")
+	}
+}
+
+func TestToAPIError_PreservesStoreErrorMetadata(t *testing.T) {
+	err := toAPIError(configstore.NewNotLeaderError("http://leader:9090"))
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("toAPIError() error type = %T, want *APIError", err)
+	}
+	if got, want := apiErr.Code, "not_raft_leader"; got != want {
+		t.Fatalf("apiErr.Code = %q, want %q", got, want)
+	}
+	if got, want := apiErr.LeaderAddress, "http://leader:9090"; got != want {
+		t.Fatalf("apiErr.LeaderAddress = %q, want %q", got, want)
 	}
 }
 

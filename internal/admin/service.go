@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"reverseproxy-poc/internal/configstore"
@@ -59,7 +60,9 @@ type NamespaceListView struct {
 
 type APIError struct {
 	StatusCode       int                           `json:"-"`
+	Code             string                        `json:"code,omitempty"`
 	Message          string                        `json:"message"`
+	LeaderAddress    string                        `json:"leader_address,omitempty"`
 	ValidationErrors []proxyconfig.ValidationError `json:"errors,omitempty"`
 	Err              error                         `json:"-"`
 }
@@ -85,11 +88,15 @@ func (e *APIError) Unwrap() error {
 }
 
 type service struct {
-	store configstore.Store
+	store            configstore.Store
+	reloadAfterWrite func(context.Context) error
 }
 
 func New(runtime Runtime) Service {
-	return NewWithStore(configstore.NewFileStore(runtime.Snapshot().AppConfig))
+	return &service{
+		store:            configstore.NewFileStore(runtime.Snapshot().AppConfig),
+		reloadAfterWrite: runtime.ReloadFromFile,
+	}
 }
 
 func NewWithStore(store configstore.Store) Service {
@@ -114,11 +121,17 @@ func (s *service) CreateNamespace(ctx context.Context, namespace string) (Namesp
 	if err != nil {
 		return NamespaceView{}, toAPIError(err)
 	}
+	if err := s.reloadRuntime(ctx); err != nil {
+		return NamespaceView{}, err
+	}
 	return namespaceViewFromStore(item), nil
 }
 
 func (s *service) DeleteNamespace(ctx context.Context, namespace string) error {
-	return toAPIError(s.store.DeleteNamespace(ctx, namespace))
+	if err := s.store.DeleteNamespace(ctx, namespace); err != nil {
+		return toAPIError(err)
+	}
+	return s.reloadRuntime(ctx)
 }
 
 func (s *service) GetNamespaceConfig(ctx context.Context, namespace string) (NamespaceConfigView, error) {
@@ -142,6 +155,9 @@ func (s *service) CreateRoute(ctx context.Context, namespace string, route proxy
 	if err != nil {
 		return proxyconfig.RouteConfig{}, toAPIError(err)
 	}
+	if err := s.reloadRuntime(ctx); err != nil {
+		return proxyconfig.RouteConfig{}, err
+	}
 	return item, nil
 }
 
@@ -150,11 +166,17 @@ func (s *service) UpdateRoute(ctx context.Context, namespace, id string, route p
 	if err != nil {
 		return proxyconfig.RouteConfig{}, toAPIError(err)
 	}
+	if err := s.reloadRuntime(ctx); err != nil {
+		return proxyconfig.RouteConfig{}, err
+	}
 	return item, nil
 }
 
 func (s *service) DeleteRoute(ctx context.Context, namespace, id string) error {
-	return toAPIError(s.store.DeleteRoute(ctx, namespace, id))
+	if err := s.store.DeleteRoute(ctx, namespace, id); err != nil {
+		return toAPIError(err)
+	}
+	return s.reloadRuntime(ctx)
 }
 
 func (s *service) GetNamespaceUpstreamPools(ctx context.Context, namespace string) (map[string]proxyconfig.UpstreamPool, error) {
@@ -170,6 +192,9 @@ func (s *service) CreateUpstreamPool(ctx context.Context, namespace, id string, 
 	if err != nil {
 		return proxyconfig.UpstreamPool{}, toAPIError(err)
 	}
+	if err := s.reloadRuntime(ctx); err != nil {
+		return proxyconfig.UpstreamPool{}, err
+	}
 	return item, nil
 }
 
@@ -178,11 +203,17 @@ func (s *service) UpdateUpstreamPool(ctx context.Context, namespace, id string, 
 	if err != nil {
 		return proxyconfig.UpstreamPool{}, toAPIError(err)
 	}
+	if err := s.reloadRuntime(ctx); err != nil {
+		return proxyconfig.UpstreamPool{}, err
+	}
 	return item, nil
 }
 
 func (s *service) DeleteUpstreamPool(ctx context.Context, namespace, id string) error {
-	return toAPIError(s.store.DeleteUpstreamPool(ctx, namespace, id))
+	if err := s.store.DeleteUpstreamPool(ctx, namespace, id); err != nil {
+		return toAPIError(err)
+	}
+	return s.reloadRuntime(ctx)
 }
 
 func namespaceViewFromStore(item configstore.NamespaceSummary) NamespaceView {
@@ -205,6 +236,20 @@ func namespaceConfigFromStore(item configstore.NamespaceConfig) NamespaceConfigV
 	}
 }
 
+func (s *service) reloadRuntime(ctx context.Context) error {
+	if s.reloadAfterWrite == nil {
+		return nil
+	}
+	if err := s.reloadAfterWrite(ctx); err != nil {
+		return &APIError{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "failed to reload proxy configuration",
+			Err:        err,
+		}
+	}
+	return nil
+}
+
 func toAPIError(err error) error {
 	if err == nil {
 		return nil
@@ -213,9 +258,11 @@ func toAPIError(err error) error {
 	var storeErr *configstore.StoreError
 	if errors.As(err, &storeErr) {
 		apiErr := &APIError{
-			StatusCode: storeErr.StatusCode,
-			Message:    storeErr.Message,
-			Err:        storeErr.Err,
+			StatusCode:    storeErr.StatusCode,
+			Code:          storeErr.Code,
+			Message:       storeErr.Message,
+			LeaderAddress: storeErr.LeaderAddress,
+			Err:           storeErr.Err,
 		}
 
 		var validationErrs proxyconfig.ValidationErrors
