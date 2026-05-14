@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"reverseproxy-poc/internal/proxyconfig"
@@ -98,5 +99,17 @@ func ValidateNamespaceName(namespace string) error {
 		StatusCode: http.StatusBadRequest,
 		Code:       "invalid_namespace",
 		Message:    "namespace must contain only letters, numbers, dot, underscore, or hyphen",
+	}
+}
+
+func ValidateIdentifier(value, field string) error {
+	if namespacePattern.MatchString(value) {
+		return nil
+	}
+	codeField := strings.ReplaceAll(field, " ", "_")
+	return &StoreError{
+		StatusCode: http.StatusBadRequest,
+		Code:       "invalid_" + codeField,
+		Message:    field + " must contain only letters, numbers, dot, underscore, or hyphen",
 	}
 }

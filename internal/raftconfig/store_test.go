@@ -25,6 +25,18 @@ func TestStoreReturnsNotLeaderWhenNodeIsFollower(t *testing.T) {
 	}
 }
 
+func TestStoreReturnsNotLeaderBeforeWriteValidationOnFollower(t *testing.T) {
+	store := NewStore(&fakeRaft{leader: "127.0.0.1:7001", state: raft.Follower}, NewFSM())
+
+	_, err := store.CreateNamespace(context.Background(), "bad:name")
+	if err == nil {
+		t.Fatal("CreateNamespace() error = nil, want not leader")
+	}
+	if !configstore.IsNotLeader(err) {
+		t.Fatalf("CreateNamespace() error = %v, want not leader", err)
+	}
+}
+
 func TestStoreAppliesCommandOnLeader(t *testing.T) {
 	fsm := NewFSM()
 	store := NewStore(&fakeRaft{state: raft.Leader, apply: fsm.Apply}, fsm)
@@ -74,6 +86,37 @@ func TestStoreRejectsInvalidNamespaceWithBadRequest(t *testing.T) {
 
 	_, err := store.CreateNamespace(context.Background(), "bad/name")
 	requireStoreError(t, err, http.StatusBadRequest, "invalid_namespace")
+}
+
+func TestStoreRejectsInvalidNamespaceBeforeApply(t *testing.T) {
+	node := &fakeRaft{state: raft.Leader}
+	store := NewStore(node, NewFSM())
+
+	_, err := store.CreateNamespace(context.Background(), "bad:name")
+	requireStoreError(t, err, http.StatusBadRequest, "invalid_namespace")
+	if node.applyCount != 0 {
+		t.Fatalf("Apply() calls = %d, want 0", node.applyCount)
+	}
+}
+
+func TestStoreRejectsInvalidNamespaceReads(t *testing.T) {
+	store := NewStore(&fakeRaft{state: raft.Leader}, NewFSM())
+
+	_, err := store.GetNamespaceConfig(context.Background(), "bad:name")
+	requireStoreError(t, err, http.StatusBadRequest, "invalid_namespace")
+}
+
+func TestStoreRejectsInvalidImportNamespaceBeforeApply(t *testing.T) {
+	node := &fakeRaft{state: raft.Leader}
+	store := NewStore(node, NewFSM())
+
+	err := store.ImportJSONConfig(context.Background(), map[string]proxyconfig.Config{
+		"bad:name": {},
+	})
+	requireStoreError(t, err, http.StatusBadRequest, "invalid_namespace")
+	if node.applyCount != 0 {
+		t.Fatalf("Apply() calls = %d, want 0", node.applyCount)
+	}
 }
 
 func TestStoreMapsApplyRejectionsToFileModeSemantics(t *testing.T) {

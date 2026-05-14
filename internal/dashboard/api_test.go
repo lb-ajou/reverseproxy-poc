@@ -363,6 +363,34 @@ func TestRaftJoinEndpoint_CallsJoiner(t *testing.T) {
 	}
 }
 
+func TestRaftJoinEndpoint_RejectsInvalidRequestBeforeJoiner(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "invalid node id", body: `{"node_id":"bad:node","raft_address":"127.0.0.1:7002"}`},
+		{name: "invalid raft address", body: `{"node_id":"node-2","raft_address":"not-a-host-port"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			joinCalls := 0
+			handler := NewHandlerWithRaft(runtime.NewState(runtime.Snapshot{}), stubService{}, stubJoiner{
+				joinFn: func(context.Context, string, string) error {
+					joinCalls++
+					return nil
+				},
+			})
+
+			rec := performDashboardRequest(handler, http.MethodPost, "/api/raft/join", tt.body)
+			requireStatus(t, rec, http.StatusBadRequest)
+			if joinCalls != 0 {
+				t.Fatalf("JoinRaft calls = %d, want 0", joinCalls)
+			}
+		})
+	}
+}
+
 func TestRaftJoinEndpoint_MapsNotLeaderError(t *testing.T) {
 	handler := NewHandlerWithRaft(runtime.NewState(runtime.Snapshot{}), stubService{}, stubJoiner{
 		joinFn: func(context.Context, string, string) error {

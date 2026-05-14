@@ -321,6 +321,16 @@ func TestPostRaftJoinPostsExpectedJSON(t *testing.T) {
 	}
 }
 
+func TestNewRaftJoinHTTPClientHasTimeout(t *testing.T) {
+	client := newRaftJoinHTTPClient()
+	if client == nil {
+		t.Fatal("newRaftJoinHTTPClient() returned nil")
+	}
+	if client.Timeout <= 0 {
+		t.Fatalf("client.Timeout = %s, want positive timeout", client.Timeout)
+	}
+}
+
 func TestRaftJoinURLAcceptsEndpointAddress(t *testing.T) {
 	got, err := raftJoinURL("http://leader:9090/api/raft/join")
 	if err != nil {

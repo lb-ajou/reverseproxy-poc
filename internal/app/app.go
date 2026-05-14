@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,6 +26,8 @@ import (
 	appruntime "reverseproxy-poc/internal/runtime"
 	"reverseproxy-poc/internal/upstream"
 )
+
+const raftJoinTimeout = 5 * time.Second
 
 type App struct {
 	logger           *log.Logger
@@ -112,7 +115,9 @@ func newRaftModeApp(cfg config.AppConfig, configPath string, logger *log.Logger)
 	store := raftconfig.NewStore(node.Raft, fsm)
 	app.raftNode = node
 	if shouldRequestRaftJoin(cfg, node.HasExistingState) {
-		if err := postRaftJoin(context.Background(), http.DefaultClient, cfg.RaftJoinAddr, cfg.RaftNodeID, cfg.RaftAdvertiseAddr); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), raftJoinTimeout)
+		defer cancel()
+		if err := postRaftJoin(ctx, newRaftJoinHTTPClient(), cfg.RaftJoinAddr, cfg.RaftNodeID, cfg.RaftAdvertiseAddr); err != nil {
 			_ = node.Shutdown()
 			return nil, fmt.Errorf("join raft cluster: %w", err)
 		}
@@ -159,7 +164,13 @@ func (a *App) Snapshot() appruntime.Snapshot {
 	return a.state.Snapshot()
 }
 
-func (a *App) JoinRaft(_ context.Context, nodeID, raftAddress string) error {
+func (a *App) JoinRaft(ctx context.Context, nodeID, raftAddress string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := validateRaftServer(nodeID, raftAddress); err != nil {
+		return err
+	}
 	if a.raftNode == nil || a.raftNode.Raft == nil {
 		return configstore.NewNotLeaderError("")
 	}
@@ -173,6 +184,21 @@ func (a *App) JoinRaft(_ context.Context, nodeID, raftAddress string) error {
 		return configstore.NewNotLeaderError(string(a.raftNode.Raft.Leader()))
 	}
 	return err
+}
+
+func validateRaftServer(nodeID, raftAddress string) error {
+	if err := configstore.ValidateIdentifier(nodeID, "node_id"); err != nil {
+		return err
+	}
+	if _, err := net.ResolveTCPAddr("tcp", raftAddress); err != nil {
+		return &configstore.StoreError{
+			StatusCode: http.StatusBadRequest,
+			Code:       "invalid_raft_address",
+			Message:    "raft address must be a host:port TCP address",
+			Err:        err,
+		}
+	}
+	return nil
 }
 
 func buildSnapshot(appCfg config.AppConfig) (appruntime.Snapshot, error) {
@@ -228,7 +254,7 @@ type raftJoinErrorResponse struct {
 
 func postRaftJoin(ctx context.Context, client *http.Client, joinAddr, nodeID, raftAddress string) error {
 	if client == nil {
-		client = http.DefaultClient
+		client = newRaftJoinHTTPClient()
 	}
 	endpoint, err := raftJoinURL(joinAddr)
 	if err != nil {
@@ -268,6 +294,10 @@ func postRaftJoin(ctx context.Context, client *http.Client, joinAddr, nodeID, ra
 		Code:       response.Code,
 		Message:    response.Message,
 	}
+}
+
+func newRaftJoinHTTPClient() *http.Client {
+	return &http.Client{Timeout: raftJoinTimeout}
 }
 
 func raftJoinURL(joinAddr string) (string, error) {

@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -60,12 +61,8 @@ func registerRaftAPI(mux *http.ServeMux, joiner RaftJoiner) {
 			writeAPIError(w, err)
 			return
 		}
-		if request.NodeID == "" || request.RaftAddress == "" {
-			writeAPIError(w, &admin.APIError{
-				StatusCode: http.StatusBadRequest,
-				Code:       "invalid_request",
-				Message:    "node_id and raft_address are required",
-			})
+		if err := validateRaftJoinRequest(request); err != nil {
+			writeAPIError(w, err)
 			return
 		}
 
@@ -75,6 +72,37 @@ func registerRaftAPI(mux *http.ServeMux, joiner RaftJoiner) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
+}
+
+func validateRaftJoinRequest(request raftJoinRequest) error {
+	if request.NodeID == "" || request.RaftAddress == "" {
+		return &admin.APIError{
+			StatusCode: http.StatusBadRequest,
+			Code:       "invalid_request",
+			Message:    "node_id and raft_address are required",
+		}
+	}
+	if err := configstore.ValidateIdentifier(request.NodeID, "node_id"); err != nil {
+		var storeErr *configstore.StoreError
+		if errors.As(err, &storeErr) {
+			return &admin.APIError{
+				StatusCode: storeErr.StatusCode,
+				Code:       storeErr.Code,
+				Message:    storeErr.Message,
+				Err:        storeErr.Err,
+			}
+		}
+		return err
+	}
+	if _, err := net.ResolveTCPAddr("tcp", request.RaftAddress); err != nil {
+		return &admin.APIError{
+			StatusCode: http.StatusBadRequest,
+			Code:       "invalid_raft_address",
+			Message:    "raft_address must be a host:port TCP address",
+			Err:        err,
+		}
+	}
+	return nil
 }
 
 func writeRaftJoinError(w http.ResponseWriter, err error) {

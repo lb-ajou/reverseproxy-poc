@@ -378,9 +378,11 @@ JSON body는 다음 규칙으로 파싱한다.
 }
 ```
 
+`leader_address`는 HashiCorp Raft가 보고한 leader의 Raft advertise address다. dashboard/admin HTTP URL과 다를 수 있으므로, 별도 매핑이 없는 클라이언트나 운영자는 직접 재시도 URL이 아니라 leader 식별 힌트로만 사용한다.
+
 ## Raft Join API
 
-`raftJoinAddr`는 leader의 dashboard/admin base URL이다. 새 노드는 기존 Raft state가 없고 join 주소가 설정된 경우 leader에 아래 요청을 보낸다. 값이 이미 `/api/raft/join`으로 끝나면 그 URL을 그대로 사용한다.
+`raftJoinAddr`는 새 노드가 join 요청을 보낼 leader의 dashboard/admin HTTP base URL이거나 전체 `/api/raft/join` HTTP endpoint다. 새 노드는 기존 Raft state가 없고 join 주소가 설정된 경우 leader에 아래 요청을 보낸다. 값이 이미 `/api/raft/join`으로 끝나면 그 URL을 그대로 사용한다.
 
 ```http
 POST /api/raft/join
@@ -395,6 +397,8 @@ Content-Type: application/json
 ```
 
 성공 시 `204 No Content`를 반환한다. 요청을 받은 노드가 leader가 아니면 설정 쓰기와 같은 `409 Conflict`, `code: "not_raft_leader"`, `leader_address` 응답을 반환한다.
+
+`/api/raft/join`은 admin/control-plane endpoint다. 이 POC에는 내장 인증이 없으므로 보호된 admin network에만 노출하거나 외부 인증, network policy 뒤에 둔다.
 
 런타임 health 상태는 Raft 복제 상태가 아니라 응답한 노드의 로컬 관측값이다.
 

@@ -63,6 +63,9 @@ func (s *Store) ListNamespaces(_ context.Context) ([]configstore.NamespaceSummar
 }
 
 func (s *Store) GetNamespaceConfig(_ context.Context, namespace string) (configstore.NamespaceConfig, error) {
+	if err := configstore.ValidateNamespaceName(namespace); err != nil {
+		return configstore.NamespaceConfig{}, err
+	}
 	state := s.fsm.DesiredState()
 	cfg, exists := state.Namespaces[namespace]
 	cfg = cloneConfig(cfg)
@@ -76,6 +79,12 @@ func (s *Store) GetNamespaceConfig(_ context.Context, namespace string) (configs
 }
 
 func (s *Store) CreateNamespace(ctx context.Context, namespace string) (configstore.NamespaceSummary, error) {
+	if err := s.ensureLeaderWrite(ctx); err != nil {
+		return configstore.NamespaceSummary{}, err
+	}
+	if err := configstore.ValidateNamespaceName(namespace); err != nil {
+		return configstore.NamespaceSummary{}, err
+	}
 	if err := s.apply(ctx, Command{Type: CommandCreateNamespace, Namespace: namespace}); err != nil {
 		return configstore.NamespaceSummary{}, err
 	}
@@ -86,10 +95,22 @@ func (s *Store) CreateNamespace(ctx context.Context, namespace string) (configst
 }
 
 func (s *Store) DeleteNamespace(ctx context.Context, namespace string) error {
+	if err := s.ensureLeaderWrite(ctx); err != nil {
+		return err
+	}
+	if err := configstore.ValidateNamespaceName(namespace); err != nil {
+		return err
+	}
 	return s.apply(ctx, Command{Type: CommandDeleteNamespace, Namespace: namespace})
 }
 
 func (s *Store) CreateRoute(ctx context.Context, namespace string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
+	if err := s.ensureLeaderWrite(ctx); err != nil {
+		return proxyconfig.RouteConfig{}, err
+	}
+	if err := configstore.ValidateNamespaceName(namespace); err != nil {
+		return proxyconfig.RouteConfig{}, err
+	}
 	if err := s.apply(ctx, Command{Type: CommandCreateRoute, Namespace: namespace, Route: route}); err != nil {
 		return proxyconfig.RouteConfig{}, err
 	}
@@ -97,6 +118,12 @@ func (s *Store) CreateRoute(ctx context.Context, namespace string, route proxyco
 }
 
 func (s *Store) UpdateRoute(ctx context.Context, namespace, id string, route proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
+	if err := s.ensureLeaderWrite(ctx); err != nil {
+		return proxyconfig.RouteConfig{}, err
+	}
+	if err := configstore.ValidateNamespaceName(namespace); err != nil {
+		return proxyconfig.RouteConfig{}, err
+	}
 	if err := s.apply(ctx, Command{Type: CommandUpdateRoute, Namespace: namespace, RouteID: id, Route: route}); err != nil {
 		return proxyconfig.RouteConfig{}, err
 	}
@@ -104,10 +131,22 @@ func (s *Store) UpdateRoute(ctx context.Context, namespace, id string, route pro
 }
 
 func (s *Store) DeleteRoute(ctx context.Context, namespace, id string) error {
+	if err := s.ensureLeaderWrite(ctx); err != nil {
+		return err
+	}
+	if err := configstore.ValidateNamespaceName(namespace); err != nil {
+		return err
+	}
 	return s.apply(ctx, Command{Type: CommandDeleteRoute, Namespace: namespace, RouteID: id})
 }
 
 func (s *Store) CreateUpstreamPool(ctx context.Context, namespace, id string, pool proxyconfig.UpstreamPool) (proxyconfig.UpstreamPool, error) {
+	if err := s.ensureLeaderWrite(ctx); err != nil {
+		return proxyconfig.UpstreamPool{}, err
+	}
+	if err := configstore.ValidateNamespaceName(namespace); err != nil {
+		return proxyconfig.UpstreamPool{}, err
+	}
 	if err := s.apply(ctx, Command{Type: CommandCreateUpstreamPool, Namespace: namespace, PoolID: id, Pool: pool}); err != nil {
 		return proxyconfig.UpstreamPool{}, err
 	}
@@ -115,6 +154,12 @@ func (s *Store) CreateUpstreamPool(ctx context.Context, namespace, id string, po
 }
 
 func (s *Store) UpdateUpstreamPool(ctx context.Context, namespace, id string, pool proxyconfig.UpstreamPool) (proxyconfig.UpstreamPool, error) {
+	if err := s.ensureLeaderWrite(ctx); err != nil {
+		return proxyconfig.UpstreamPool{}, err
+	}
+	if err := configstore.ValidateNamespaceName(namespace); err != nil {
+		return proxyconfig.UpstreamPool{}, err
+	}
 	if err := s.apply(ctx, Command{Type: CommandUpdateUpstreamPool, Namespace: namespace, PoolID: id, Pool: pool}); err != nil {
 		return proxyconfig.UpstreamPool{}, err
 	}
@@ -122,11 +167,35 @@ func (s *Store) UpdateUpstreamPool(ctx context.Context, namespace, id string, po
 }
 
 func (s *Store) DeleteUpstreamPool(ctx context.Context, namespace, id string) error {
+	if err := s.ensureLeaderWrite(ctx); err != nil {
+		return err
+	}
+	if err := configstore.ValidateNamespaceName(namespace); err != nil {
+		return err
+	}
 	return s.apply(ctx, Command{Type: CommandDeleteUpstreamPool, Namespace: namespace, PoolID: id})
 }
 
 func (s *Store) ImportJSONConfig(ctx context.Context, namespaces map[string]proxyconfig.Config) error {
+	if err := s.ensureLeaderWrite(ctx); err != nil {
+		return err
+	}
+	for namespace := range namespaces {
+		if err := configstore.ValidateNamespaceName(namespace); err != nil {
+			return err
+		}
+	}
 	return s.apply(ctx, Command{Type: CommandImportJSONConfig, Import: namespaces})
+}
+
+func (s *Store) ensureLeaderWrite(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.raft.State() != raft.Leader {
+		return configstore.NewNotLeaderError(string(s.raft.Leader()))
+	}
+	return nil
 }
 
 func (s *Store) apply(ctx context.Context, cmd Command) error {

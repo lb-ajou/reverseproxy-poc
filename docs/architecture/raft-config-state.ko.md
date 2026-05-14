@@ -9,6 +9,7 @@
 - `configs/proxy/*.json`은 HA 모드에서 bootstrap, import, export, 개발 편의용 artifact로만 취급한다. 정상 운영 중 설정 쓰기의 source of truth는 Raft 상태다.
 - 기존 Raft data dir이 있으면 JSON seed보다 Raft data dir의 상태가 우선한다. 재시작한 노드는 남아 있는 Raft log/snapshot에서 desired config를 복원하며 JSON seed를 다시 import하지 않는다.
 - Bootstrap 모드에서 기존 Raft 상태가 없을 때만 JSON seed를 import한다. `raftJsonSeedDir`가 있으면 그 디렉터리를 사용하고, 없으면 `proxyConfigDir`의 JSON 파일을 사용한다.
-- Join 모드는 로컬 JSON seed를 무시한다. `raftJoinAddr`는 leader의 dashboard/admin base URL이며 새 노드는 `POST /api/raft/join`으로 자신의 `node_id`와 Raft advertise address를 등록한 뒤 leader가 가진 Raft 상태를 따라간다. `raftJoinAddr`가 이미 `/api/raft/join`으로 끝나면 그대로 사용한다.
+- Join 모드는 로컬 JSON seed를 무시한다. `raftJoinAddr`는 leader의 dashboard/admin HTTP base URL 또는 전체 `/api/raft/join` HTTP endpoint이며, 새 노드는 `POST /api/raft/join`으로 자신의 `node_id`와 Raft advertise address를 등록한 뒤 leader가 가진 Raft 상태를 따라간다.
+- `/api/raft/join`은 admin/control-plane endpoint다. 이 POC에는 내장 인증이 없으므로 보호된 admin network에만 노출하거나 외부 인증, network policy 뒤에 둔다.
 - Health 상태와 `least_connection` 카운터는 로컬 노드 상태다. Raft로 복제하지 않으며 dashboard runtime API도 응답한 노드의 로컬 관측값을 보여준다.
-- Follower에 설정 쓰기 요청이 도착하면 leader forward를 하지 않고 `409 Conflict`를 반환한다. JSON body에는 `code: "not_raft_leader"`와 가능한 경우 `leader_address`가 포함된다.
+- Follower에 설정 쓰기 요청이 도착하면 leader forward를 하지 않고 `409 Conflict`를 반환한다. JSON body에는 `code: "not_raft_leader"`와 가능한 경우 `leader_address`가 포함된다. 이 값은 HashiCorp Raft가 보고한 leader의 Raft advertise address이며, dashboard/admin HTTP URL과 다를 수 있으므로 별도 매핑이 없으면 직접 재시도 URL이 아니라 leader 힌트로만 사용한다.
