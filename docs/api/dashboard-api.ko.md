@@ -378,6 +378,24 @@ JSON body는 다음 규칙으로 파싱한다.
 }
 ```
 
+## Raft Join API
+
+`raftJoinAddr`는 leader의 dashboard/admin base URL이다. 새 노드는 기존 Raft state가 없고 join 주소가 설정된 경우 leader에 아래 요청을 보낸다. 값이 이미 `/api/raft/join`으로 끝나면 그 URL을 그대로 사용한다.
+
+```http
+POST /api/raft/join
+Content-Type: application/json
+```
+
+```json
+{
+  "node_id": "node-2",
+  "raft_address": "127.0.0.1:7002"
+}
+```
+
+성공 시 `204 No Content`를 반환한다. 요청을 받은 노드가 leader가 아니면 설정 쓰기와 같은 `409 Conflict`, `code: "not_raft_leader"`, `leader_address` 응답을 반환한다.
+
 런타임 health 상태는 Raft 복제 상태가 아니라 응답한 노드의 로컬 관측값이다.
 
 ## 프론트엔드에서 바로 쓰는 흐름

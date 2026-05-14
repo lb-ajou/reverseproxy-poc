@@ -3,6 +3,7 @@ package raftconfig
 import (
 	"bytes"
 	"io"
+	"net/http"
 	"testing"
 
 	"github.com/hashicorp/raft"
@@ -60,6 +61,31 @@ func TestFSMApplyInvalidCommandLeavesStateUnchanged(t *testing.T) {
 	}
 }
 
+func TestFSMApplyRejectsInvalidNamespace(t *testing.T) {
+	fsm := NewFSM()
+	resp := applyCommand(t, fsm, Command{
+		Type:      CommandCreateNamespace,
+		Namespace: "bad/name",
+	})
+
+	requireApplyRejection(t, resp, http.StatusBadRequest, "invalid_namespace")
+	if got := len(fsm.DesiredState().Namespaces); got != 0 {
+		t.Fatalf("len(fsm.DesiredState().Namespaces) = %d, want 0", got)
+	}
+}
+
+func TestFSMImportJSONConfigRejectsInvalidNamespace(t *testing.T) {
+	fsm := NewFSM()
+	resp := applyCommand(t, fsm, Command{
+		Type: CommandImportJSONConfig,
+		Import: map[string]proxyconfig.Config{
+			"bad/name": {},
+		},
+	})
+
+	requireApplyRejection(t, resp, http.StatusBadRequest, "invalid_namespace")
+}
+
 func TestFSMSnapshotRestoreRoundTrip(t *testing.T) {
 	fsm := NewFSM()
 	applyCommand(t, fsm, Command{
@@ -81,6 +107,16 @@ func TestFSMSnapshotRestoreRoundTrip(t *testing.T) {
 	}
 	if _, ok := restored.DesiredState().Namespaces["admin"]; !ok {
 		t.Fatal("restored namespace admin missing")
+	}
+}
+
+func requireApplyRejection(t *testing.T, resp ApplyResponse, statusCode int, code string) {
+	t.Helper()
+	if resp.Error == "" {
+		t.Fatal("ApplyResponse.Error is empty, want rejection")
+	}
+	if resp.StatusCode != statusCode || resp.Code != code {
+		t.Fatalf("ApplyResponse = status %d code %q, want status %d code %q", resp.StatusCode, resp.Code, statusCode, code)
 	}
 }
 

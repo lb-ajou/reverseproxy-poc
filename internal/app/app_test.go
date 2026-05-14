@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -220,6 +223,111 @@ func TestNew_RaftModeUsesRaftNodeConfig(t *testing.T) {
 	_, err := New(cfg, filepath.Join(dir, "app.json"), log.New(io.Discard, "", 0))
 	if err == nil {
 		t.Fatal("New() error = nil, want raft bind error")
+	}
+}
+
+func TestShouldImportSeedRules(t *testing.T) {
+	base := config.AppConfig{
+		ConfigStore:     "raft",
+		RaftBootstrap:   true,
+		ProxyConfigDir:  "configs/proxy",
+		RaftJSONSeedDir: "configs/seed",
+	}
+
+	tests := []struct {
+		name             string
+		cfg              config.AppConfig
+		hasExistingState bool
+		want             bool
+	}{
+		{name: "bootstrap brand-new node imports", cfg: base, want: true},
+		{name: "existing raft state skips", cfg: base, hasExistingState: true, want: false},
+		{name: "join skips", cfg: func() config.AppConfig {
+			cfg := base
+			cfg.RaftJoinAddr = "http://leader:9090"
+			return cfg
+		}(), want: false},
+		{name: "non-bootstrap skips", cfg: func() config.AppConfig {
+			cfg := base
+			cfg.RaftBootstrap = false
+			return cfg
+		}(), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldImportSeed(tt.cfg, tt.hasExistingState); got != tt.want {
+				t.Fatalf("shouldImportSeed() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadSeedNamespacesLoadsProxyConfigDirectory(t *testing.T) {
+	dir := t.TempDir()
+	writeTestJSON(t, filepath.Join(dir, "admin.json"), `{
+  "routes": [],
+  "upstream_pools": {
+    "pool-api": { "upstreams": ["10.0.0.11:8080"] }
+  }
+}`)
+
+	namespaces, err := loadSeedNamespaces(dir)
+	if err != nil {
+		t.Fatalf("loadSeedNamespaces() error = %v", err)
+	}
+	if _, ok := namespaces["admin"]; !ok {
+		t.Fatal("namespaces[admin] missing")
+	}
+}
+
+func TestShouldRequestRaftJoinRules(t *testing.T) {
+	cfg := config.AppConfig{RaftJoinAddr: "http://leader:9090"}
+	if !shouldRequestRaftJoin(cfg, false) {
+		t.Fatal("shouldRequestRaftJoin() = false, want true for brand-new joining node")
+	}
+	if shouldRequestRaftJoin(cfg, true) {
+		t.Fatal("shouldRequestRaftJoin() = true, want false with existing raft state")
+	}
+	cfg.RaftJoinAddr = ""
+	if shouldRequestRaftJoin(cfg, false) {
+		t.Fatal("shouldRequestRaftJoin() = true, want false without join address")
+	}
+}
+
+func TestPostRaftJoinPostsExpectedJSON(t *testing.T) {
+	var gotPath string
+	var gotBody raftJoinRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode join body error = %v", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	if err := postRaftJoin(context.Background(), server.Client(), server.URL, "node-2", "127.0.0.1:7002"); err != nil {
+		t.Fatalf("postRaftJoin() error = %v", err)
+	}
+	if gotPath != "/api/raft/join" {
+		t.Fatalf("path = %q, want /api/raft/join", gotPath)
+	}
+	if gotBody.NodeID != "node-2" || gotBody.RaftAddress != "127.0.0.1:7002" {
+		t.Fatalf("join body = %+v, want node-2/127.0.0.1:7002", gotBody)
+	}
+}
+
+func TestRaftJoinURLAcceptsEndpointAddress(t *testing.T) {
+	got, err := raftJoinURL("http://leader:9090/api/raft/join")
+	if err != nil {
+		t.Fatalf("raftJoinURL() error = %v", err)
+	}
+	if got != "http://leader:9090/api/raft/join" {
+		t.Fatalf("raftJoinURL() = %q, want endpoint unchanged", got)
 	}
 }
 

@@ -125,6 +125,10 @@ func (s *Store) DeleteUpstreamPool(ctx context.Context, namespace, id string) er
 	return s.apply(ctx, Command{Type: CommandDeleteUpstreamPool, Namespace: namespace, PoolID: id})
 }
 
+func (s *Store) ImportJSONConfig(ctx context.Context, namespaces map[string]proxyconfig.Config) error {
+	return s.apply(ctx, Command{Type: CommandImportJSONConfig, Import: namespaces})
+}
+
 func (s *Store) apply(ctx context.Context, cmd Command) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -145,9 +149,17 @@ func (s *Store) apply(ctx context.Context, cmd Command) error {
 		return err
 	}
 	if resp, ok := future.Response().(ApplyResponse); ok && resp.Error != "" {
+		statusCode := resp.StatusCode
+		if statusCode == 0 {
+			statusCode = http.StatusUnprocessableEntity
+		}
+		code := resp.Code
+		if code == "" {
+			code = "raft_apply_rejected"
+		}
 		return &configstore.StoreError{
-			StatusCode: http.StatusUnprocessableEntity,
-			Code:       "raft_apply_rejected",
+			StatusCode: statusCode,
+			Code:       code,
 			Message:    resp.Error,
 		}
 	}

@@ -22,10 +22,11 @@ type NodeOptions struct {
 }
 
 type Node struct {
-	Raft        *raft.Raft
-	logStore    *raftboltdb.BoltStore
-	stableStore *raftboltdb.BoltStore
-	transport   *raft.NetworkTransport
+	Raft             *raft.Raft
+	HasExistingState bool
+	logStore         *raftboltdb.BoltStore
+	stableStore      *raftboltdb.BoltStore
+	transport        *raft.NetworkTransport
 }
 
 func (n *Node) Shutdown() error {
@@ -123,6 +124,7 @@ func NewNode(opts NodeOptions) (*Node, error) {
 		_ = node.Shutdown()
 		return nil, fmt.Errorf("inspect raft state: %w", err)
 	}
+	node.HasExistingState = hasState
 	if opts.Bootstrap && !hasState {
 		future := node.Raft.BootstrapCluster(raft.Configuration{
 			Servers: []raft.Server{{

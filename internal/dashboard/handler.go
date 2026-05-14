@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -18,17 +19,77 @@ import (
 //go:embed static/index.html
 var dashboardHTML []byte
 
+type RaftJoiner interface {
+	JoinRaft(ctx context.Context, nodeID, raftAddress string) error
+}
+
+type raftJoinRequest struct {
+	NodeID      string `json:"node_id"`
+	RaftAddress string `json:"raft_address"`
+}
+
 func NewHandler(state *runtime.State, service admin.Service) http.Handler {
+	return NewHandlerWithRaft(state, service, nil)
+}
+
+func NewHandlerWithRaft(state *runtime.State, service admin.Service, joiner RaftJoiner) http.Handler {
 	if service == nil {
 		panic("dashboard admin service is required")
 	}
 
 	mux := http.NewServeMux()
+	if joiner != nil {
+		registerRaftAPI(mux, joiner)
+	}
 	registerConfigAPI(mux, service)
 	registerRuntimeAPI(mux, state)
 	registerSPA(mux)
 
 	return mux
+}
+
+func registerRaftAPI(mux *http.ServeMux, joiner RaftJoiner) {
+	mux.HandleFunc("/api/raft/join", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeAPIError(w, newMethodNotAllowedError())
+			return
+		}
+
+		var request raftJoinRequest
+		if err := decodeJSONBody(r, &request); err != nil {
+			writeAPIError(w, err)
+			return
+		}
+		if request.NodeID == "" || request.RaftAddress == "" {
+			writeAPIError(w, &admin.APIError{
+				StatusCode: http.StatusBadRequest,
+				Code:       "invalid_request",
+				Message:    "node_id and raft_address are required",
+			})
+			return
+		}
+
+		if err := joiner.JoinRaft(r.Context(), request.NodeID, request.RaftAddress); err != nil {
+			writeRaftJoinError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+func writeRaftJoinError(w http.ResponseWriter, err error) {
+	var storeErr *configstore.StoreError
+	if errors.As(err, &storeErr) {
+		writeAPIError(w, &admin.APIError{
+			StatusCode:    storeErr.StatusCode,
+			Code:          storeErr.Code,
+			Message:       storeErr.Message,
+			LeaderAddress: storeErr.LeaderAddress,
+			Err:           storeErr.Err,
+		})
+		return
+	}
+	writeAPIError(w, err)
 }
 
 func registerSPA(mux *http.ServeMux) {

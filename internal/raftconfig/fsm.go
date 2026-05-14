@@ -1,8 +1,10 @@
 package raftconfig
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -38,7 +40,7 @@ func NewFSMWithConfig(appCfg config.AppConfig, onApply func(configstore.DesiredS
 func (f *FSM) Apply(log *raft.Log) any {
 	cmd, err := DecodeCommand(log.Data)
 	if err != nil {
-		return ApplyResponse{Error: err.Error()}
+		return applyError(invalidRequestError(err.Error()))
 	}
 
 	f.mu.RLock()
@@ -46,13 +48,13 @@ func (f *FSM) Apply(log *raft.Log) any {
 	f.mu.RUnlock()
 
 	if err := f.applyCommand(&next, cmd); err != nil {
-		return ApplyResponse{Error: err.Error()}
+		return applyError(err)
 	}
 	if errs := validateDesiredState(next); len(errs) > 0 {
-		return ApplyResponse{Error: proxyconfig.ValidationErrors(errs).Error()}
+		return applyError(validationError(proxyconfig.ValidationErrors(errs)))
 	}
 	if _, err := configstore.ProjectSnapshot(f.appCfg, next); err != nil {
-		return ApplyResponse{Error: err.Error()}
+		return applyError(validationError(err))
 	}
 
 	next.Version = log.Index
@@ -102,47 +104,53 @@ func (f *FSM) Restore(reader io.ReadCloser) error {
 }
 
 func (f *FSM) applyCommand(state *configstore.DesiredState, cmd Command) error {
+	if cmd.Namespace != "" {
+		if err := configstore.ValidateNamespaceName(cmd.Namespace); err != nil {
+			return err
+		}
+	}
+
 	switch cmd.Type {
 	case CommandCreateNamespace:
 		if _, exists := state.Namespaces[cmd.Namespace]; exists {
-			return fmt.Errorf("namespace %q already exists", cmd.Namespace)
+			return conflictError(fmt.Sprintf("namespace %q already exists", cmd.Namespace))
 		}
 		state.Namespaces[cmd.Namespace] = ensureNamespace(state.Namespaces, cmd.Namespace)
 	case CommandDeleteNamespace:
 		if _, exists := state.Namespaces[cmd.Namespace]; !exists {
-			return fmt.Errorf("namespace %q was not found", cmd.Namespace)
+			return notFoundError(fmt.Sprintf("namespace %q was not found", cmd.Namespace))
 		}
 		delete(state.Namespaces, cmd.Namespace)
 	case CommandCreateUpstreamPool:
 		cfg := ensureNamespace(state.Namespaces, cmd.Namespace)
 		if _, exists := cfg.UpstreamPools[cmd.PoolID]; exists {
-			return fmt.Errorf("upstream pool %q already exists", cmd.PoolID)
+			return conflictError(fmt.Sprintf("upstream pool %q already exists", cmd.PoolID))
 		}
 		cfg.UpstreamPools[cmd.PoolID] = cloneUpstreamPool(cmd.Pool)
 		state.Namespaces[cmd.Namespace] = cfg
 	case CommandUpdateUpstreamPool:
 		cfg, exists := state.Namespaces[cmd.Namespace]
 		if !exists {
-			return fmt.Errorf("namespace %q was not found", cmd.Namespace)
+			return notFoundError(fmt.Sprintf("namespace %q was not found", cmd.Namespace))
 		}
 		cfg = cloneConfig(cfg)
 		if _, exists := cfg.UpstreamPools[cmd.PoolID]; !exists {
-			return fmt.Errorf("upstream pool %q was not found", cmd.PoolID)
+			return notFoundError(fmt.Sprintf("upstream pool %q was not found", cmd.PoolID))
 		}
 		cfg.UpstreamPools[cmd.PoolID] = cloneUpstreamPool(cmd.Pool)
 		state.Namespaces[cmd.Namespace] = cfg
 	case CommandDeleteUpstreamPool:
 		cfg, exists := state.Namespaces[cmd.Namespace]
 		if !exists {
-			return fmt.Errorf("namespace %q was not found", cmd.Namespace)
+			return notFoundError(fmt.Sprintf("namespace %q was not found", cmd.Namespace))
 		}
 		cfg = cloneConfig(cfg)
 		if _, exists := cfg.UpstreamPools[cmd.PoolID]; !exists {
-			return fmt.Errorf("upstream pool %q was not found", cmd.PoolID)
+			return notFoundError(fmt.Sprintf("upstream pool %q was not found", cmd.PoolID))
 		}
 		for _, route := range cfg.Routes {
 			if route.UpstreamPool == cmd.PoolID {
-				return fmt.Errorf("upstream pool %q is still referenced by route %q", cmd.PoolID, route.ID)
+				return conflictError(fmt.Sprintf("upstream pool %q is still referenced by route %q", cmd.PoolID, route.ID))
 			}
 		}
 		delete(cfg.UpstreamPools, cmd.PoolID)
@@ -151,18 +159,18 @@ func (f *FSM) applyCommand(state *configstore.DesiredState, cmd Command) error {
 		cfg := ensureNamespace(state.Namespaces, cmd.Namespace)
 		for _, route := range cfg.Routes {
 			if route.ID == cmd.Route.ID {
-				return fmt.Errorf("route %q already exists", cmd.Route.ID)
+				return conflictError(fmt.Sprintf("route %q already exists", cmd.Route.ID))
 			}
 		}
 		cfg.Routes = append(cfg.Routes, cloneRoute(cmd.Route))
 		state.Namespaces[cmd.Namespace] = cfg
 	case CommandUpdateRoute:
 		if cmd.Route.ID != cmd.RouteID {
-			return fmt.Errorf("route id in command must match route id in body")
+			return invalidRequestError("route id in body must match request path")
 		}
 		cfg, exists := state.Namespaces[cmd.Namespace]
 		if !exists {
-			return fmt.Errorf("namespace %q was not found", cmd.Namespace)
+			return notFoundError(fmt.Sprintf("namespace %q was not found", cmd.Namespace))
 		}
 		cfg = cloneConfig(cfg)
 		for index, route := range cfg.Routes {
@@ -172,11 +180,11 @@ func (f *FSM) applyCommand(state *configstore.DesiredState, cmd Command) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("route %q was not found", cmd.RouteID)
+		return notFoundError(fmt.Sprintf("route %q was not found", cmd.RouteID))
 	case CommandDeleteRoute:
 		cfg, exists := state.Namespaces[cmd.Namespace]
 		if !exists {
-			return fmt.Errorf("namespace %q was not found", cmd.Namespace)
+			return notFoundError(fmt.Sprintf("namespace %q was not found", cmd.Namespace))
 		}
 		cfg = cloneConfig(cfg)
 		for index, route := range cfg.Routes {
@@ -186,20 +194,72 @@ func (f *FSM) applyCommand(state *configstore.DesiredState, cmd Command) error {
 				return nil
 			}
 		}
-		return fmt.Errorf("route %q was not found", cmd.RouteID)
+		return notFoundError(fmt.Sprintf("route %q was not found", cmd.RouteID))
 	case CommandImportJSONConfig:
 		if len(state.Namespaces) != 0 {
-			return fmt.Errorf("import requires empty state")
+			return conflictError("import requires empty state")
 		}
 		state.Namespaces = make(map[string]proxyconfig.Config, len(cmd.Import))
 		for namespace, cfg := range cmd.Import {
+			if err := configstore.ValidateNamespaceName(namespace); err != nil {
+				return err
+			}
 			state.Namespaces[namespace] = cloneConfig(cfg)
 		}
 	default:
-		return fmt.Errorf("unknown command type %q", cmd.Type)
+		return invalidRequestError(fmt.Sprintf("unknown command type %q", cmd.Type))
 	}
 
 	return nil
+}
+
+func applyError(err error) ApplyResponse {
+	var storeErr *configstore.StoreError
+	if errors.As(err, &storeErr) {
+		return ApplyResponse{
+			Error:      storeErr.Message,
+			StatusCode: storeErr.StatusCode,
+			Code:       storeErr.Code,
+		}
+	}
+	return ApplyResponse{
+		Error:      err.Error(),
+		StatusCode: http.StatusUnprocessableEntity,
+		Code:       "validation_failed",
+	}
+}
+
+func invalidRequestError(message string) *configstore.StoreError {
+	return &configstore.StoreError{
+		StatusCode: http.StatusBadRequest,
+		Code:       "invalid_request",
+		Message:    message,
+	}
+}
+
+func conflictError(message string) *configstore.StoreError {
+	return &configstore.StoreError{
+		StatusCode: http.StatusConflict,
+		Code:       "resource_conflict",
+		Message:    message,
+	}
+}
+
+func notFoundError(message string) *configstore.StoreError {
+	return &configstore.StoreError{
+		StatusCode: http.StatusNotFound,
+		Code:       "resource_not_found",
+		Message:    message,
+	}
+}
+
+func validationError(err error) *configstore.StoreError {
+	return &configstore.StoreError{
+		StatusCode: http.StatusUnprocessableEntity,
+		Code:       "validation_failed",
+		Message:    "validation failed",
+		Err:        err,
+	}
 }
 
 func ensureNamespace(namespaces map[string]proxyconfig.Config, namespace string) proxyconfig.Config {

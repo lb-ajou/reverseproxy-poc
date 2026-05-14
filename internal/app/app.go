@@ -1,17 +1,26 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
+	"time"
+
+	"github.com/hashicorp/raft"
 
 	"reverseproxy-poc/internal/admin"
 	"reverseproxy-poc/internal/config"
 	"reverseproxy-poc/internal/configstore"
 	"reverseproxy-poc/internal/dashboard"
 	"reverseproxy-poc/internal/proxy"
+	"reverseproxy-poc/internal/proxyconfig"
 	"reverseproxy-poc/internal/raftconfig"
 	appruntime "reverseproxy-poc/internal/runtime"
 	"reverseproxy-poc/internal/upstream"
@@ -102,7 +111,32 @@ func newRaftModeApp(cfg config.AppConfig, configPath string, logger *log.Logger)
 
 	store := raftconfig.NewStore(node.Raft, fsm)
 	app.raftNode = node
-	app.dashboardHandler = dashboard.NewHandler(state, admin.NewWithStore(store))
+	if shouldRequestRaftJoin(cfg, node.HasExistingState) {
+		if err := postRaftJoin(context.Background(), http.DefaultClient, cfg.RaftJoinAddr, cfg.RaftNodeID, cfg.RaftAdvertiseAddr); err != nil {
+			_ = node.Shutdown()
+			return nil, fmt.Errorf("join raft cluster: %w", err)
+		}
+	}
+	if shouldImportSeed(cfg, node.HasExistingState) {
+		seed, err := loadSeedNamespaces(seedConfigDir(cfg))
+		if err != nil {
+			_ = node.Shutdown()
+			return nil, fmt.Errorf("load raft JSON seed: %w", err)
+		}
+		if len(seed) > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := waitForRaftLeader(ctx, node.Raft); err != nil {
+				_ = node.Shutdown()
+				return nil, err
+			}
+			if err := store.ImportJSONConfig(ctx, seed); err != nil {
+				_ = node.Shutdown()
+				return nil, fmt.Errorf("import raft JSON seed: %w", err)
+			}
+		}
+	}
+	app.dashboardHandler = dashboard.NewHandlerWithRaft(state, admin.NewWithStore(store), app)
 	app.proxyServer = newServer(cfg.ProxyListenAddr, app.proxyHandler)
 	app.dashboardServer = newServer(cfg.DashboardListenAddr, app.dashboardHandler)
 
@@ -125,6 +159,22 @@ func (a *App) Snapshot() appruntime.Snapshot {
 	return a.state.Snapshot()
 }
 
+func (a *App) JoinRaft(_ context.Context, nodeID, raftAddress string) error {
+	if a.raftNode == nil || a.raftNode.Raft == nil {
+		return configstore.NewNotLeaderError("")
+	}
+	if a.raftNode.Raft.State() != raft.Leader {
+		return configstore.NewNotLeaderError(string(a.raftNode.Raft.Leader()))
+	}
+	err := a.raftNode.Raft.AddVoter(raft.ServerID(nodeID), raft.ServerAddress(raftAddress), 0, 0).Error()
+	if errors.Is(err, raft.ErrNotLeader) ||
+		errors.Is(err, raft.ErrLeadershipLost) ||
+		errors.Is(err, raft.ErrLeadershipTransferInProgress) {
+		return configstore.NewNotLeaderError(string(a.raftNode.Raft.Leader()))
+	}
+	return err
+}
+
 func buildSnapshot(appCfg config.AppConfig) (appruntime.Snapshot, error) {
 	store := configstore.NewFileStore(appCfg)
 	desired, err := store.DesiredState(context.Background())
@@ -133,6 +183,121 @@ func buildSnapshot(appCfg config.AppConfig) (appruntime.Snapshot, error) {
 	}
 
 	return configstore.ProjectSnapshot(appCfg, desired)
+}
+
+func shouldImportSeed(cfg config.AppConfig, hasExistingState bool) bool {
+	return cfg.RaftBootstrap && cfg.RaftJoinAddr == "" && !hasExistingState
+}
+
+func seedConfigDir(cfg config.AppConfig) string {
+	if cfg.RaftJSONSeedDir != "" {
+		return cfg.RaftJSONSeedDir
+	}
+	return cfg.ProxyConfigDir
+}
+
+func loadSeedNamespaces(dir string) (map[string]proxyconfig.Config, error) {
+	loaded, err := proxyconfig.LoadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	namespaces := make(map[string]proxyconfig.Config, len(loaded))
+	for _, cfg := range loaded {
+		if err := configstore.ValidateNamespaceName(cfg.Source); err != nil {
+			return nil, err
+		}
+		namespaces[cfg.Source] = cfg.Config
+	}
+	return namespaces, nil
+}
+
+func shouldRequestRaftJoin(cfg config.AppConfig, hasExistingState bool) bool {
+	return cfg.RaftJoinAddr != "" && !hasExistingState
+}
+
+type raftJoinRequest struct {
+	NodeID      string `json:"node_id"`
+	RaftAddress string `json:"raft_address"`
+}
+
+type raftJoinErrorResponse struct {
+	Message       string `json:"message"`
+	Code          string `json:"code,omitempty"`
+	LeaderAddress string `json:"leader_address,omitempty"`
+}
+
+func postRaftJoin(ctx context.Context, client *http.Client, joinAddr, nodeID, raftAddress string) error {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	endpoint, err := raftJoinURL(joinAddr)
+	if err != nil {
+		return err
+	}
+	body, err := json.Marshal(raftJoinRequest{NodeID: nodeID, RaftAddress: raftAddress})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+
+	var response raftJoinErrorResponse
+	_ = json.NewDecoder(resp.Body).Decode(&response)
+	if response.Message == "" {
+		response.Message = fmt.Sprintf("raft join request failed with status %d", resp.StatusCode)
+	}
+	if response.Code == "not_raft_leader" {
+		return configstore.NewNotLeaderError(response.LeaderAddress)
+	}
+	return &configstore.StoreError{
+		StatusCode: resp.StatusCode,
+		Code:       response.Code,
+		Message:    response.Message,
+	}
+}
+
+func raftJoinURL(joinAddr string) (string, error) {
+	parsed, err := url.Parse(joinAddr)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("raft join address must be an absolute dashboard URL")
+	}
+	if strings.TrimRight(parsed.Path, "/") == "/api/raft/join" {
+		return parsed.String(), nil
+	}
+	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/api/raft/join"
+	return parsed.String(), nil
+}
+
+func waitForRaftLeader(ctx context.Context, node *raft.Raft) error {
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if node.State() == raft.Leader {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for raft leader: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 func (a *App) startHealthChecker(ctx context.Context) {

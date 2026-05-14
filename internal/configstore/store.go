@@ -89,3 +89,14 @@ func IsNotLeader(err error) bool {
 	var storeErr *StoreError
 	return errors.As(err, &storeErr) && storeErr.Code == "not_raft_leader"
 }
+
+func ValidateNamespaceName(namespace string) error {
+	if namespacePattern.MatchString(namespace) {
+		return nil
+	}
+	return &StoreError{
+		StatusCode: http.StatusBadRequest,
+		Code:       "invalid_namespace",
+		Message:    "namespace must contain only letters, numbers, dot, underscore, or hyphen",
+	}
+}

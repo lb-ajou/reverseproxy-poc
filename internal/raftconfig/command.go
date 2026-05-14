@@ -31,7 +31,9 @@ type Command struct {
 }
 
 type ApplyResponse struct {
-	Error string `json:"error,omitempty"`
+	Error      string `json:"error,omitempty"`
+	StatusCode int    `json:"status_code,omitempty"`
+	Code       string `json:"code,omitempty"`
 }
 
 func EncodeCommand(cmd Command) ([]byte, error) {

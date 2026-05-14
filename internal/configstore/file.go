@@ -271,12 +271,8 @@ func (s *FileStore) DeleteUpstreamPool(ctx context.Context, namespace, id string
 }
 
 func (s *FileStore) namespacePath(namespace string) (string, error) {
-	if !namespacePattern.MatchString(namespace) {
-		return "", &StoreError{
-			StatusCode: http.StatusBadRequest,
-			Code:       "invalid_namespace",
-			Message:    "namespace must contain only letters, numbers, dot, underscore, or hyphen",
-		}
+	if err := ValidateNamespaceName(namespace); err != nil {
+		return "", err
 	}
 
 	return filepath.Join(s.appCfg.ProxyConfigDir, namespace+".json"), nil

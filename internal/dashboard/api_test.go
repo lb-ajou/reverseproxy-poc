@@ -32,6 +32,17 @@ type stubService struct {
 	deleteUpstreamPoolFn    func(namespace, id string) error
 }
 
+type stubJoiner struct {
+	joinFn func(ctx context.Context, nodeID, raftAddress string) error
+}
+
+func (j stubJoiner) JoinRaft(ctx context.Context, nodeID, raftAddress string) error {
+	if j.joinFn != nil {
+		return j.joinFn(ctx, nodeID, raftAddress)
+	}
+	return nil
+}
+
 func (s stubService) ListNamespaces(_ context.Context) ([]admin.NamespaceView, error) {
 	if s.listNamespacesFn != nil {
 		return s.listNamespacesFn()
@@ -332,6 +343,39 @@ func TestConfigAPI_NotLeaderErrorIncludesLeaderAddress(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"leader_address":"127.0.0.1:9090"`) {
 		t.Fatalf("response body = %s, want leader_address", rec.Body.String())
+	}
+}
+
+func TestRaftJoinEndpoint_CallsJoiner(t *testing.T) {
+	var gotNodeID, gotRaftAddress string
+	handler := NewHandlerWithRaft(runtime.NewState(runtime.Snapshot{}), stubService{}, stubJoiner{
+		joinFn: func(_ context.Context, nodeID, raftAddress string) error {
+			gotNodeID = nodeID
+			gotRaftAddress = raftAddress
+			return nil
+		},
+	})
+
+	rec := performDashboardRequest(handler, http.MethodPost, "/api/raft/join", `{"node_id":"node-2","raft_address":"127.0.0.1:7002"}`)
+	requireStatus(t, rec, http.StatusNoContent)
+	if gotNodeID != "node-2" || gotRaftAddress != "127.0.0.1:7002" {
+		t.Fatalf("JoinRaft called with nodeID=%q raftAddress=%q, want node-2/127.0.0.1:7002", gotNodeID, gotRaftAddress)
+	}
+}
+
+func TestRaftJoinEndpoint_MapsNotLeaderError(t *testing.T) {
+	handler := NewHandlerWithRaft(runtime.NewState(runtime.Snapshot{}), stubService{}, stubJoiner{
+		joinFn: func(context.Context, string, string) error {
+			return configstore.NewNotLeaderError("127.0.0.1:9090")
+		},
+	})
+
+	rec := performDashboardRequest(handler, http.MethodPost, "/api/raft/join", `{"node_id":"node-2","raft_address":"127.0.0.1:7002"}`)
+	requireStatus(t, rec, http.StatusConflict)
+	var body errorResponse
+	decodeJSON(t, rec, &body)
+	if body.Code != "not_raft_leader" || body.LeaderAddress != "127.0.0.1:9090" {
+		t.Fatalf("error body = %+v, want not_raft_leader with leader address", body)
 	}
 }
 
