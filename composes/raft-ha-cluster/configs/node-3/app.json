@@ -1,0 +1,11 @@
+{
+  "proxyListenAddr": ":8080",
+  "dashboardListenAddr": ":9090",
+  "proxyConfigDir": "/app/configs/seed",
+  "configStore": "raft",
+  "raftNodeId": "node-3",
+  "raftBindAddr": "0.0.0.0:7003",
+  "raftAdvertiseAddr": "proxy-3:7003",
+  "raftDataDir": "/app/data/raft",
+  "raftJoinAddr": "http://proxy-1:9090"
+}
