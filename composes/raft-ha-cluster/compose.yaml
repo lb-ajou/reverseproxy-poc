@@ -1,0 +1,126 @@
+services:
+  backend-a:
+    build:
+      context: ../test-server
+    environment:
+      SERVER_NAME: backend-a
+      SCENARIO_NAME: raft-ha-cluster
+      PORT: "8080"
+      SERVER_VERSION: v1
+      HEALTH_STATUS: "200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 3s
+    networks:
+      - raft-ha-net
+
+  backend-b:
+    build:
+      context: ../test-server
+    environment:
+      SERVER_NAME: backend-b
+      SCENARIO_NAME: raft-ha-cluster
+      PORT: "8080"
+      SERVER_VERSION: v1
+      HEALTH_STATUS: "200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 3s
+    networks:
+      - raft-ha-net
+
+  backend-c:
+    build:
+      context: ../test-server
+    environment:
+      SERVER_NAME: backend-c
+      SCENARIO_NAME: raft-ha-cluster
+      PORT: "8080"
+      SERVER_VERSION: v1
+      HEALTH_STATUS: "200"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 3s
+    networks:
+      - raft-ha-net
+
+  proxy-1:
+    build:
+      context: ../..
+    command: ["/app/configs/node-1/app.json"]
+    depends_on:
+      backend-a:
+        condition: service_healthy
+      backend-b:
+        condition: service_healthy
+      backend-c:
+        condition: service_healthy
+    ports:
+      - "18080:8080"
+      - "19090:9090"
+      - "17001:7001"
+    volumes:
+      - ./configs:/app/configs:ro
+      - proxy-1-raft:/app/data/raft
+    networks:
+      - raft-ha-net
+
+  proxy-2:
+    build:
+      context: ../..
+    command: ["/app/configs/node-2/app.json"]
+    depends_on:
+      backend-a:
+        condition: service_healthy
+      backend-b:
+        condition: service_healthy
+      backend-c:
+        condition: service_healthy
+    ports:
+      - "18081:8080"
+      - "19091:9090"
+      - "17002:7002"
+    volumes:
+      - ./configs:/app/configs:ro
+      - proxy-2-raft:/app/data/raft
+    networks:
+      - raft-ha-net
+
+  proxy-3:
+    build:
+      context: ../..
+    command: ["/app/configs/node-3/app.json"]
+    depends_on:
+      backend-a:
+        condition: service_healthy
+      backend-b:
+        condition: service_healthy
+      backend-c:
+        condition: service_healthy
+    ports:
+      - "18082:8080"
+      - "19092:9090"
+      - "17003:7003"
+    volumes:
+      - ./configs:/app/configs:ro
+      - proxy-3-raft:/app/data/raft
+    networks:
+      - raft-ha-net
+
+networks:
+  raft-ha-net:
+    name: raft-ha-cluster-net
+
+volumes:
+  proxy-1-raft:
+  proxy-2-raft:
+  proxy-3-raft:
