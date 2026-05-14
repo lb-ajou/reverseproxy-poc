@@ -219,17 +219,32 @@ create_added_route() {
     }' >/dev/null
 }
 
-require_follower_write_rejected() {
+post_json_capture() {
+  local url="$1"
+  local request_body="$2"
+  local response_file status
+
+  response_file="$(mktemp)"
+  status="$(curl -sS -o "$response_file" -w "%{http_code}" \
+    -X POST "$url" \
+    -H "Content-Type: application/json" \
+    -d "$request_body" || true)"
+  CAPTURED_RESPONSE="$(cat "$response_file")"
+  rm -f "$response_file"
+
+  if [ -z "$status" ]; then
+    fail "POST ${url} failed before an HTTP response was received"
+  fi
+
+  CAPTURED_STATUS="$status"
+}
+
+capture_follower_write() {
   local follower="$1"
   local base
   base="$(dashboard_url "$follower")"
 
-  local response_file status body
-  response_file="$(mktemp)"
-  status="$(curl -sS -o "$response_file" -w "%{http_code}" \
-    -X POST "${base}/api/namespaces/default/routes" \
-    -H "Content-Type: application/json" \
-    -d '{
+  post_json_capture "${base}/api/namespaces/default/routes" '{
       "id": "r-follower-rejected",
       "enabled": true,
       "match": {
@@ -237,43 +252,61 @@ require_follower_write_rejected() {
         "path": { "type": "prefix", "value": "/" }
       },
       "upstream_pool": "pool-raft"
-    }')"
-  body="$(cat "$response_file")"
-  rm -f "$response_file"
+    }'
+}
 
-  if [ "$status" != "409" ]; then
-    printf "%s\n" "$body" >&2
-    fail "expected follower write on ${follower} to return 409, got ${status}"
+try_follower_write_rejected() {
+  local follower="$1"
+
+  capture_follower_write "$follower"
+
+  [ "$CAPTURED_STATUS" = "409" ] &&
+    printf "%s" "$CAPTURED_RESPONSE" | jq -e '.code == "not_raft_leader"' >/dev/null &&
+    printf "%s" "$CAPTURED_RESPONSE" | jq -e '.leader_address | type == "string" and length > 0' >/dev/null
+}
+
+require_follower_write_rejected() {
+  local follower="$1"
+
+  capture_follower_write "$follower"
+
+  if [ "$CAPTURED_STATUS" != "409" ]; then
+    printf "%s\n" "$CAPTURED_RESPONSE" >&2
+    fail "expected follower write on ${follower} to return 409, got ${CAPTURED_STATUS}"
   fi
-  if ! printf "%s" "$body" | jq -e '.code == "not_raft_leader"' >/dev/null; then
-    printf "%s\n" "$body" >&2
+  if ! printf "%s" "$CAPTURED_RESPONSE" | jq -e '.code == "not_raft_leader"' >/dev/null; then
+    printf "%s\n" "$CAPTURED_RESPONSE" >&2
     fail "expected follower write on ${follower} to return not_raft_leader"
   fi
-  if ! printf "%s" "$body" | jq -e '.leader_address | type == "string" and length > 0' >/dev/null; then
-    printf "%s\n" "$body" >&2
+  if ! printf "%s" "$CAPTURED_RESPONSE" | jq -e '.leader_address | type == "string" and length > 0' >/dev/null; then
+    printf "%s\n" "$CAPTURED_RESPONSE" >&2
     fail "expected follower write on ${follower} to include leader_address"
   fi
+}
+
+find_follower() {
+  for node in node-2 node-3; do
+    if try_follower_write_rejected "$node" >/dev/null 2>&1; then
+      printf "%s" "$node"
+      return 0
+    fi
+  done
+
+  fail "could not find a follower among node-2 and node-3"
 }
 
 require_join_validation_rejected() {
   local request_body="$1"
   local expected_code="$2"
 
-  local response_file status response
-  response_file="$(mktemp)"
-  status="$(curl -sS -o "$response_file" -w "%{http_code}" \
-    -X POST "http://localhost:19090/api/raft/join" \
-    -H "Content-Type: application/json" \
-    -d "$request_body")"
-  response="$(cat "$response_file")"
-  rm -f "$response_file"
+  post_json_capture "http://localhost:19090/api/raft/join" "$request_body"
 
-  if [ "$status" != "400" ]; then
-    printf "%s\n" "$response" >&2
-    fail "expected join validation to return 400, got ${status}"
+  if [ "$CAPTURED_STATUS" != "400" ]; then
+    printf "%s\n" "$CAPTURED_RESPONSE" >&2
+    fail "expected join validation to return 400, got ${CAPTURED_STATUS}"
   fi
-  if ! printf "%s" "$response" | jq -e --arg code "$expected_code" '.code == $code' >/dev/null; then
-    printf "%s\n" "$response" >&2
+  if ! printf "%s" "$CAPTURED_RESPONSE" | jq -e --arg code "$expected_code" '.code == $code' >/dev/null; then
+    printf "%s\n" "$CAPTURED_RESPONSE" >&2
     fail "expected join validation code ${expected_code}"
   fi
 }
@@ -315,6 +348,43 @@ create_failover_route() {
     }' >/dev/null
 }
 
+try_create_persistence_pool() {
+  local node="$1"
+  local base
+  base="$(dashboard_url "$node")"
+
+  curl -fsS -X POST "${base}/api/namespaces/default/upstream-pools" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "id": "pool-persistence",
+      "upstreams": ["backend-a:8080", "backend-b:8080", "backend-c:8080"],
+      "health_check": {
+        "path": "/health",
+        "interval": "5s",
+        "timeout": "2s",
+        "expect_status": 200
+      }
+    }' >/dev/null
+}
+
+create_persistence_route() {
+  local leader="$1"
+  local base
+  base="$(dashboard_url "$leader")"
+
+  curl -fsS -X POST "${base}/api/namespaces/default/routes" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "id": "r-persistence",
+      "enabled": true,
+      "match": {
+        "hosts": ["raft-persistence.localtest.me"],
+        "path": { "type": "prefix", "value": "/" }
+      },
+      "upstream_pool": "pool-persistence"
+    }' >/dev/null
+}
+
 find_leader_after_failover() {
   local attempts="${1:-60}"
 
@@ -329,6 +399,22 @@ find_leader_after_failover() {
   done
 
   fail "could not find leader after stopping proxy-1"
+}
+
+find_leader_after_restart() {
+  local attempts="${1:-60}"
+
+  for _ in $(seq 1 "$attempts"); do
+    for node in node-1 node-2 node-3; do
+      if try_create_persistence_pool "$node" >/dev/null 2>&1; then
+        printf "%s" "$node"
+        return 0
+      fi
+    done
+    sleep 1
+  done
+
+  fail "could not find leader after persistence restart"
 }
 
 wait_config_has_route() {
@@ -429,7 +515,9 @@ main() {
   log "join and replication checks passed"
 
   log "verify follower write rejection"
-  require_follower_write_rejected node-2
+  local follower
+  follower="$(find_follower)"
+  log "verified follower write rejection on ${follower}"
 
   log "verify raft join validation"
   require_join_validation_rejected '{"node_id":"bad:node","raft_address":"proxy-bad:7009"}' "invalid_node_id"
@@ -473,6 +561,23 @@ main() {
   wait_config_has_pool node-1 "pool-failover"
   wait_config_has_pool node-2 "pool-failover"
   wait_config_has_pool node-3 "pool-failover"
+  wait_proxy_route node-1 "raft-failover.localtest.me"
+  wait_proxy_route node-2 "raft-failover.localtest.me"
+  wait_proxy_route node-3 "raft-failover.localtest.me"
+
+  local restart_leader
+  restart_leader="$(find_leader_after_restart)"
+  log "leader after persistence restart: ${restart_leader}"
+  create_persistence_route "$restart_leader"
+  wait_config_has_route node-1 "r-persistence"
+  wait_config_has_route node-2 "r-persistence"
+  wait_config_has_route node-3 "r-persistence"
+  wait_config_has_pool node-1 "pool-persistence"
+  wait_config_has_pool node-2 "pool-persistence"
+  wait_config_has_pool node-3 "pool-persistence"
+  wait_proxy_route node-1 "raft-persistence.localtest.me"
+  wait_proxy_route node-2 "raft-persistence.localtest.me"
+  wait_proxy_route node-3 "raft-persistence.localtest.me"
 
   log "failover, rejoin, and persistence checks passed"
 }
