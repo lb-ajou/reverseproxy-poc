@@ -51,6 +51,37 @@ func TestValidate_RequiresProxyConfigDir(t *testing.T) {
 	}
 }
 
+func TestValidate_RaftModeRequiresNodeSettings(t *testing.T) {
+	cfg := Default()
+	cfg.ConfigStore = "raft"
+
+	if err := Validate(cfg); err == nil {
+		t.Fatal("Validate() error = nil, want missing raft settings")
+	}
+}
+
+func TestValidate_RaftModeAcceptsRequiredNodeSettings(t *testing.T) {
+	cfg := Default()
+	cfg.ConfigStore = "raft"
+	cfg.RaftNodeID = "node-1"
+	cfg.RaftBindAddr = "127.0.0.1:7001"
+	cfg.RaftAdvertiseAddr = "127.0.0.1:7001"
+	cfg.RaftDataDir = "data/node-1"
+
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidate_RejectsUnknownConfigStore(t *testing.T) {
+	cfg := Default()
+	cfg.ConfigStore = "postgres"
+
+	if err := Validate(cfg); err == nil {
+		t.Fatal("Validate() error = nil, want unknown config store")
+	}
+}
+
 func writeConfigFile(t *testing.T, path, body string) {
 	t.Helper()
 

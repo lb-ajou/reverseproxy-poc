@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"reverseproxy-poc/internal/config"
+	appruntime "reverseproxy-poc/internal/runtime"
 	"reverseproxy-poc/internal/upstream"
 )
 
@@ -200,5 +201,37 @@ func TestNew_WiresDashboardServerHandler(t *testing.T) {
 	}
 	if app.dashboardServer.Handler != app.dashboardHandler {
 		t.Fatal("dashboardServer.Handler was not wired to dashboardHandler")
+	}
+}
+
+func TestNew_RaftModeUsesRaftNodeConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.AppConfig{
+		ProxyListenAddr:     ":8080",
+		DashboardListenAddr: ":9090",
+		ProxyConfigDir:      dir,
+		ConfigStore:         "raft",
+		RaftNodeID:          "node-1",
+		RaftBindAddr:        "not-a-valid-address",
+		RaftAdvertiseAddr:   "127.0.0.1:7001",
+		RaftDataDir:         filepath.Join(dir, "raft"),
+	}
+
+	_, err := New(cfg, filepath.Join(dir, "app.json"), log.New(io.Discard, "", 0))
+	if err == nil {
+		t.Fatal("New() error = nil, want raft bind error")
+	}
+}
+
+func TestReloadFromFile_DisabledInRaftMode(t *testing.T) {
+	app := &App{
+		configPath: filepath.Join(t.TempDir(), "app.json"),
+		state: appruntime.NewState(appruntime.Snapshot{
+			AppConfig: config.AppConfig{ConfigStore: "raft"},
+		}),
+	}
+
+	if err := app.ReloadFromFile(context.Background()); err == nil {
+		t.Fatal("ReloadFromFile() error = nil, want disabled in raft mode")
 	}
 }

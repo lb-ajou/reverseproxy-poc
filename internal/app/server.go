@@ -37,11 +37,20 @@ func (a *App) Run(ctx context.Context) error {
 func (a *App) Shutdown(ctx context.Context) error {
 	var errs []error
 
-	if err := a.proxyServer.Shutdown(ctx); err != nil {
-		errs = append(errs, fmt.Errorf("shutdown proxy server: %w", err))
+	if a.proxyServer != nil {
+		if err := a.proxyServer.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("shutdown proxy server: %w", err))
+		}
 	}
-	if err := a.dashboardServer.Shutdown(ctx); err != nil {
-		errs = append(errs, fmt.Errorf("shutdown dashboard server: %w", err))
+	if a.dashboardServer != nil {
+		if err := a.dashboardServer.Shutdown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("shutdown dashboard server: %w", err))
+		}
+	}
+	if a.raftNode != nil {
+		if err := a.raftNode.Shutdown(); err != nil {
+			errs = append(errs, fmt.Errorf("shutdown raft node: %w", err))
+		}
 	}
 
 	return errors.Join(errs...)

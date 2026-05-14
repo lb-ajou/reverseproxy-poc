@@ -9,10 +9,10 @@ import (
 
 	"reverseproxy-poc/internal/admin"
 	"reverseproxy-poc/internal/config"
+	"reverseproxy-poc/internal/configstore"
 	"reverseproxy-poc/internal/dashboard"
 	"reverseproxy-poc/internal/proxy"
-	"reverseproxy-poc/internal/proxyconfig"
-	"reverseproxy-poc/internal/route"
+	"reverseproxy-poc/internal/raftconfig"
 	appruntime "reverseproxy-poc/internal/runtime"
 	"reverseproxy-poc/internal/upstream"
 )
@@ -30,6 +30,7 @@ type App struct {
 	dashboardHandler http.Handler
 	proxyServer      *http.Server
 	dashboardServer  *http.Server
+	raftNode         *raftconfig.Node
 }
 
 func New(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, error) {
@@ -40,27 +41,84 @@ func New(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, err
 		return nil, err
 	}
 
+	switch cfg.ConfigStore {
+	case "", "file":
+		return newFileModeApp(cfg, configPath, logger)
+	case "raft":
+		return newRaftModeApp(cfg, configPath, logger)
+	default:
+		return nil, fmt.Errorf("config store must be file or raft")
+	}
+}
+
+func newFileModeApp(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, error) {
 	snapshot, err := buildSnapshot(cfg)
 	if err != nil {
 		return nil, err
 	}
 
 	state := appruntime.NewState(snapshot)
+	app := newApp(cfg, configPath, logger, state, snapshot)
+	app.dashboardHandler = dashboard.NewHandler(state, admin.New(app))
+	app.dashboardServer = newServer(cfg.DashboardListenAddr, app.dashboardHandler)
 
-	app := &App{
-		logger:        logger,
-		configPath:    configPath,
-		state:         state,
-		healthChecker: upstream.NewChecker(snapshot.Upstreams),
-		proxyHandler:  proxy.NewHandler(state),
+	return app, nil
+}
+
+func newRaftModeApp(cfg config.AppConfig, configPath string, logger *log.Logger) (*App, error) {
+	var app *App
+	fsm := raftconfig.NewFSMWithConfig(cfg, func(desired configstore.DesiredState) {
+		if app == nil {
+			return
+		}
+		snapshot, err := configstore.ProjectSnapshot(cfg, desired)
+		if err != nil {
+			logger.Printf("failed to project raft configuration: %v", err)
+			return
+		}
+		app.state.Swap(snapshot)
+		app.swapHealthChecker(snapshot.Upstreams)
+	})
+
+	snapshot, err := configstore.ProjectSnapshot(cfg, fsm.DesiredState())
+	if err != nil {
+		return nil, err
 	}
 
-	app.dashboardHandler = dashboard.NewHandler(state, admin.New(app))
+	state := appruntime.NewState(snapshot)
+	app = newApp(cfg, configPath, logger, state, snapshot)
 
+	node, err := raftconfig.NewNode(raftconfig.NodeOptions{
+		NodeID:        cfg.RaftNodeID,
+		BindAddr:      cfg.RaftBindAddr,
+		AdvertiseAddr: cfg.RaftAdvertiseAddr,
+		DataDir:       cfg.RaftDataDir,
+		Bootstrap:     cfg.RaftBootstrap,
+		FSM:           fsm,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	store := raftconfig.NewStore(node.Raft, fsm)
+	app.raftNode = node
+	app.dashboardHandler = dashboard.NewHandler(state, admin.NewWithStore(store))
 	app.proxyServer = newServer(cfg.ProxyListenAddr, app.proxyHandler)
 	app.dashboardServer = newServer(cfg.DashboardListenAddr, app.dashboardHandler)
 
 	return app, nil
+}
+
+func newApp(cfg config.AppConfig, configPath string, logger *log.Logger, state *appruntime.State, snapshot appruntime.Snapshot) *App {
+	proxyHandler := proxy.NewHandler(state)
+	return &App{
+		logger:        logger,
+		configPath:    configPath,
+		state:         state,
+		healthChecker: upstream.NewChecker(snapshot.Upstreams),
+		proxyHandler:  proxyHandler,
+		proxyServer:   newServer(cfg.ProxyListenAddr, proxyHandler),
+	}
 }
 
 func (a *App) Snapshot() appruntime.Snapshot {
@@ -68,22 +126,13 @@ func (a *App) Snapshot() appruntime.Snapshot {
 }
 
 func buildSnapshot(appCfg config.AppConfig) (appruntime.Snapshot, error) {
-	proxyCfgs, err := proxyconfig.LoadDir(appCfg.ProxyConfigDir)
+	store := configstore.NewFileStore(appCfg)
+	desired, err := store.DesiredState(context.Background())
 	if err != nil {
 		return appruntime.Snapshot{}, fmt.Errorf("load proxy configs: %w", err)
 	}
 
-	routes, err := route.BuildTable(proxyCfgs)
-	if err != nil {
-		return appruntime.Snapshot{}, fmt.Errorf("build route table: %w", err)
-	}
-
-	upstreams, err := upstream.BuildRegistry(proxyCfgs)
-	if err != nil {
-		return appruntime.Snapshot{}, fmt.Errorf("build upstream registry: %w", err)
-	}
-
-	return appruntime.NewSnapshot(appCfg, proxyCfgs, routes, upstreams), nil
+	return configstore.ProjectSnapshot(appCfg, desired)
 }
 
 func (a *App) startHealthChecker(ctx context.Context) {

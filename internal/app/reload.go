@@ -13,6 +13,9 @@ func (a *App) Reload(_ context.Context, cfg config.AppConfig) error {
 	}
 
 	current := a.state.Snapshot().AppConfig
+	if current.ConfigStore == "raft" || cfg.ConfigStore == "raft" {
+		return fmt.Errorf("file reload is disabled when configStore is raft")
+	}
 	if current.ProxyListenAddr != cfg.ProxyListenAddr ||
 		current.DashboardListenAddr != cfg.DashboardListenAddr ||
 		current.ProxyConfigDir != cfg.ProxyConfigDir {
@@ -32,6 +35,10 @@ func (a *App) Reload(_ context.Context, cfg config.AppConfig) error {
 }
 
 func (a *App) ReloadFromFile(ctx context.Context) error {
+	if a.state.Snapshot().AppConfig.ConfigStore == "raft" {
+		return fmt.Errorf("file reload is disabled when configStore is raft")
+	}
+
 	cfg, err := config.Load(a.configPath)
 	if err != nil {
 		return err
