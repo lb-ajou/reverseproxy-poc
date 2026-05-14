@@ -365,6 +365,21 @@ JSON body는 다음 규칙으로 파싱한다.
 - `500 Internal Server Error`
   파일 읽기/쓰기 실패, decode 실패, reload 실패
 
+## HA 모드 오류
+
+`configStore`가 `raft`인 노드에서 설정 쓰기 요청이 follower에 도착하면 첫 구현은 leader forward를 하지 않는다.
+응답은 `409 Conflict`이며 body는 다음 형태다.
+
+```json
+{
+  "message": "configuration writes must be sent to the raft leader",
+  "code": "not_raft_leader",
+  "leader_address": "127.0.0.1:9090"
+}
+```
+
+런타임 health 상태는 Raft 복제 상태가 아니라 응답한 노드의 로컬 관측값이다.
+
 ## 프론트엔드에서 바로 쓰는 흐름
 
 대시보드 UI는 아래 순서로 붙이면 된다.

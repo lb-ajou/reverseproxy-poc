@@ -11,6 +11,7 @@ import (
 
 	"reverseproxy-poc/internal/admin"
 	"reverseproxy-poc/internal/config"
+	"reverseproxy-poc/internal/configstore"
 	"reverseproxy-poc/internal/proxyconfig"
 	"reverseproxy-poc/internal/route"
 	"reverseproxy-poc/internal/runtime"
@@ -306,6 +307,32 @@ func TestCreateNamespaceEndpoint_CreatesNamespace(t *testing.T) {
 	var body admin.NamespaceView
 	decodeJSON(t, rec, &body)
 	requireNamespace(t, body.Namespace, "admin")
+}
+
+func TestConfigAPI_NotLeaderErrorIncludesLeaderAddress(t *testing.T) {
+	handler := NewHandler(runtime.NewState(runtime.Snapshot{}), stubService{
+		createNamespaceFn: func(string) (admin.NamespaceView, error) {
+			return admin.NamespaceView{}, &admin.APIError{
+				StatusCode: http.StatusConflict,
+				Message:    "configuration writes must be sent to the raft leader",
+				Err:        configstore.NewNotLeaderError("127.0.0.1:9090"),
+			}
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/namespaces", strings.NewReader(`{"namespace":"admin"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if got, want := rec.Code, http.StatusConflict; got != want {
+		t.Fatalf("status = %d, want %d", got, want)
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"not_raft_leader"`) {
+		t.Fatalf("response body = %s, want not_raft_leader code", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"leader_address":"127.0.0.1:9090"`) {
+		t.Fatalf("response body = %s, want leader_address", rec.Body.String())
+	}
 }
 
 func TestDeleteNamespaceEndpoint_DeletesNamespace(t *testing.T) {

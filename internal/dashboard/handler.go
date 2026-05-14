@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"reverseproxy-poc/internal/admin"
+	"reverseproxy-poc/internal/configstore"
+	"reverseproxy-poc/internal/proxyconfig"
 	"reverseproxy-poc/internal/runtime"
 )
 
@@ -52,6 +54,13 @@ func newMethodNotAllowedError() *admin.APIError {
 	}
 }
 
+type errorResponse struct {
+	Message       string                        `json:"message"`
+	Code          string                        `json:"code,omitempty"`
+	LeaderAddress string                        `json:"leader_address,omitempty"`
+	Errors        []proxyconfig.ValidationError `json:"errors,omitempty"`
+}
+
 func writeJSON(w http.ResponseWriter, value interface{}) {
 	writeJSONStatus(w, http.StatusOK, value)
 }
@@ -65,12 +74,26 @@ func writeJSONStatus(w http.ResponseWriter, statusCode int, value interface{}) {
 func writeAPIError(w http.ResponseWriter, err error) {
 	var adminErr *admin.APIError
 	if errors.As(err, &adminErr) {
-		writeJSONStatus(w, adminErr.StatusCode, adminErr)
+		response := errorResponse{
+			Message:       adminErr.Message,
+			Code:          adminErr.Code,
+			LeaderAddress: adminErr.LeaderAddress,
+			Errors:        adminErr.ValidationErrors,
+		}
+
+		var storeErr *configstore.StoreError
+		if errors.As(adminErr.Err, &storeErr) {
+			if response.Code == "" {
+				response.Code = storeErr.Code
+			}
+			if response.LeaderAddress == "" {
+				response.LeaderAddress = storeErr.LeaderAddress
+			}
+		}
+
+		writeJSONStatus(w, adminErr.StatusCode, response)
 		return
 	}
 
-	writeJSONStatus(w, http.StatusInternalServerError, &admin.APIError{
-		StatusCode: http.StatusInternalServerError,
-		Message:    "internal server error",
-	})
+	writeJSONStatus(w, http.StatusInternalServerError, errorResponse{Message: "internal server error"})
 }
