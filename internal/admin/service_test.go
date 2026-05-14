@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"reverseproxy-poc/internal/config"
+	"reverseproxy-poc/internal/configstore"
 	"reverseproxy-poc/internal/proxyconfig"
 	"reverseproxy-poc/internal/route"
 	appruntime "reverseproxy-poc/internal/runtime"
@@ -41,7 +42,71 @@ func (r *testRuntime) ReloadFromFile(context.Context) error {
 	return nil
 }
 
-func TestCreateUpstreamPoolAndRoute_WritesDefaultNamespaceAndReloads(t *testing.T) {
+type stubConfigStore struct {
+	listCalled      bool
+	namespaces      []configstore.NamespaceSummary
+	namespaceConfig configstore.NamespaceConfig
+}
+
+func (s *stubConfigStore) DesiredState(context.Context) (configstore.DesiredState, error) {
+	return configstore.DesiredState{}, nil
+}
+
+func (s *stubConfigStore) ListNamespaces(context.Context) ([]configstore.NamespaceSummary, error) {
+	s.listCalled = true
+	return s.namespaces, nil
+}
+
+func (s *stubConfigStore) GetNamespaceConfig(context.Context, string) (configstore.NamespaceConfig, error) {
+	return s.namespaceConfig, nil
+}
+func (s *stubConfigStore) CreateNamespace(context.Context, string) (configstore.NamespaceSummary, error) {
+	return configstore.NamespaceSummary{}, nil
+}
+func (s *stubConfigStore) DeleteNamespace(context.Context, string) error { return nil }
+func (s *stubConfigStore) CreateRoute(context.Context, string, proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
+	return proxyconfig.RouteConfig{}, nil
+}
+func (s *stubConfigStore) UpdateRoute(context.Context, string, string, proxyconfig.RouteConfig) (proxyconfig.RouteConfig, error) {
+	return proxyconfig.RouteConfig{}, nil
+}
+func (s *stubConfigStore) DeleteRoute(context.Context, string, string) error { return nil }
+func (s *stubConfigStore) CreateUpstreamPool(context.Context, string, string, proxyconfig.UpstreamPool) (proxyconfig.UpstreamPool, error) {
+	return proxyconfig.UpstreamPool{}, nil
+}
+func (s *stubConfigStore) UpdateUpstreamPool(context.Context, string, string, proxyconfig.UpstreamPool) (proxyconfig.UpstreamPool, error) {
+	return proxyconfig.UpstreamPool{}, nil
+}
+func (s *stubConfigStore) DeleteUpstreamPool(context.Context, string, string) error { return nil }
+
+func TestNewWithStore_UsesConfigStore(t *testing.T) {
+	store := &stubConfigStore{
+		namespaces: []configstore.NamespaceSummary{{
+			Namespace:         "default",
+			Path:              "configs/proxy/default.json",
+			Exists:            true,
+			RouteCount:        1,
+			UpstreamPoolCount: 1,
+		}},
+	}
+	service := NewWithStore(store)
+
+	items, err := service.ListNamespaces(context.Background())
+	if err != nil {
+		t.Fatalf("ListNamespaces() error = %v", err)
+	}
+	if got, want := len(items), 1; got != want {
+		t.Fatalf("len(items) = %d, want %d", got, want)
+	}
+	if got, want := items[0].Namespace, "default"; got != want {
+		t.Fatalf("items[0].Namespace = %q, want %q", got, want)
+	}
+	if !store.listCalled {
+		t.Fatal("store.ListNamespaces was not called")
+	}
+}
+
+func TestCreateUpstreamPoolAndRoute_WritesDefaultNamespace(t *testing.T) {
 	service, testRuntime := newTestService(t)
 
 	pool, err := service.CreateUpstreamPool(context.Background(), DefaultNamespace, "pool-api", proxyconfig.UpstreamPool{
@@ -80,15 +145,8 @@ func TestCreateUpstreamPoolAndRoute_WritesDefaultNamespaceAndReloads(t *testing.
 		t.Fatal("loaded.Config.UpstreamPools[pool-api] was not written")
 	}
 
-	snapshot := testRuntime.Snapshot()
-	if got, want := len(snapshot.ProxyConfigs), 1; got != want {
-		t.Fatalf("len(snapshot.ProxyConfigs) = %d, want %d", got, want)
-	}
-	if got, want := len(snapshot.RouteTable), 1; got != want {
-		t.Fatalf("len(snapshot.RouteTable) = %d, want %d", got, want)
-	}
-	if _, ok := snapshot.Upstreams.Get("default:pool-api"); !ok {
-		t.Fatal("snapshot.Upstreams.Get(default:pool-api) returned no pool")
+	if got, want := len(testRuntime.Snapshot().ProxyConfigs), 0; got != want {
+		t.Fatalf("len(snapshot.ProxyConfigs) = %d, want %d before runtime reload", got, want)
 	}
 }
 
@@ -111,10 +169,6 @@ func TestDeleteUpstreamPool_RejectsReferencedPool(t *testing.T) {
     }
   }
 }`)
-
-	if err := testRuntime.ReloadFromFile(context.Background()); err != nil {
-		t.Fatalf("ReloadFromFile() error = %v", err)
-	}
 
 	err := service.DeleteUpstreamPool(context.Background(), DefaultNamespace, "pool-api")
 	if err == nil {
@@ -149,7 +203,7 @@ func TestListNamespaces_IncludesDefaultWhenMissing(t *testing.T) {
 	}
 }
 
-func TestListNamespaces_UsesAppliedSnapshot(t *testing.T) {
+func TestListNamespaces_ReadsConfigStoreState(t *testing.T) {
 	service, testRuntime := newTestService(t)
 	writeTestJSON(t, filepath.Join(testRuntime.snapshot.AppConfig.ProxyConfigDir, "admin.json"), `{
   "routes": [],
@@ -161,37 +215,18 @@ func TestListNamespaces_UsesAppliedSnapshot(t *testing.T) {
 		t.Fatalf("ListNamespaces() error = %v", err)
 	}
 
-	if got, want := len(items), 1; got != want {
+	if got, want := len(items), 2; got != want {
 		t.Fatalf("len(items) = %d, want %d", got, want)
 	}
-	if got, want := items[0].Namespace, DefaultNamespace; got != want {
+	if got, want := items[0].Namespace, "admin"; got != want {
 		t.Fatalf("items[0].Namespace = %q, want %q", got, want)
 	}
-	if items[0].Exists {
-		t.Fatal("items[0].Exists = true, want false")
-	}
-
-	if err := testRuntime.ReloadFromFile(context.Background()); err != nil {
-		t.Fatalf("ReloadFromFile() error = %v", err)
-	}
-
-	items, err = service.ListNamespaces(context.Background())
-	if err != nil {
-		t.Fatalf("ListNamespaces() after reload error = %v", err)
-	}
-
-	if got, want := len(items), 2; got != want {
-		t.Fatalf("len(items) after reload = %d, want %d", got, want)
-	}
-	if got, want := items[0].Namespace, "admin"; got != want {
-		t.Fatalf("items[0].Namespace after reload = %q, want %q", got, want)
-	}
 	if !items[0].Exists {
-		t.Fatal("items[0].Exists after reload = false, want true")
+		t.Fatal("items[0].Exists = false, want true")
 	}
 }
 
-func TestCreateNamespace_WritesEmptyConfigAndReloads(t *testing.T) {
+func TestCreateNamespace_WritesEmptyConfig(t *testing.T) {
 	service, testRuntime := newTestService(t)
 
 	view, err := service.CreateNamespace(context.Background(), "admin")
@@ -224,7 +259,7 @@ func TestCreateNamespace_WritesEmptyConfigAndReloads(t *testing.T) {
 	}
 }
 
-func TestDeleteNamespace_RemovesFileAndReloads(t *testing.T) {
+func TestDeleteNamespace_RemovesFile(t *testing.T) {
 	service, testRuntime := newTestService(t)
 	writeTestJSON(t, filepath.Join(testRuntime.snapshot.AppConfig.ProxyConfigDir, "admin.json"), `{
   "routes": [
@@ -243,10 +278,6 @@ func TestDeleteNamespace_RemovesFileAndReloads(t *testing.T) {
     }
   }
 }`)
-
-	if err := testRuntime.ReloadFromFile(context.Background()); err != nil {
-		t.Fatalf("ReloadFromFile() error = %v", err)
-	}
 
 	if err := service.DeleteNamespace(context.Background(), "admin"); err != nil {
 		t.Fatalf("DeleteNamespace() error = %v", err)
@@ -344,15 +375,21 @@ func assertFileMode(t *testing.T, path string, want os.FileMode) {
 	}
 }
 
-func TestNamespaceConfigAppliedAtUsesRuntimeSnapshot(t *testing.T) {
-	service, testRuntime := newTestService(t)
-	testRuntime.snapshot.AppliedAt = time.Unix(1700000000, 0).UTC()
+func TestNamespaceConfigAppliedAtUsesConfigStore(t *testing.T) {
+	appliedAt := time.Unix(1700000000, 0).UTC()
+	service := NewWithStore(&stubConfigStore{
+		namespaceConfig: configstore.NamespaceConfig{
+			Namespace: DefaultNamespace,
+			Exists:    true,
+			AppliedAt: appliedAt,
+		},
+	})
 
 	view, err := service.GetNamespaceConfig(context.Background(), DefaultNamespace)
 	if err != nil {
 		t.Fatalf("GetNamespaceConfig() error = %v", err)
 	}
-	if got, want := view.AppliedAt, testRuntime.snapshot.AppliedAt; got != want {
+	if got, want := view.AppliedAt, appliedAt; got != want {
 		t.Fatalf("AppliedAt = %v, want %v", got, want)
 	}
 }
