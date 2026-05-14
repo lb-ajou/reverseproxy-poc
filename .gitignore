@@ -8,3 +8,5 @@ internal/dashboard/static/*
 !.gitkeep
 
 plan/
+
+composes/raft-ha-cluster/.out/
