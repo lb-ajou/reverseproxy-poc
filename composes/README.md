@@ -2,7 +2,7 @@
 
 `composes/`는 리버스프록시를 로컬에서 실행할 때 붙여볼 수 있는 백엔드 테스트 환경 모음이다.
 
-이 디렉토리의 compose들은 프록시 앱 자체를 띄우지 않는다. 프록시는 로컬에서 실행하고, compose는 외부 접근 가능한 백엔드 서버들과 health check 대상만 제공한다.
+대부분의 compose는 프록시 앱 자체를 띄우지 않는다. 프록시는 로컬에서 실행하고, compose는 외부 접근 가능한 백엔드 서버들과 health check 대상만 제공한다. `raft-ha-cluster`는 예외로, backend와 3-node reverse proxy cluster를 함께 띄운다.
 
 ## 공통 규칙
 
@@ -27,6 +27,8 @@
   - `X-Forwarded-For` 기반 5-tuple hash 라우팅을 검증하는 시나리오
 - `least-connection-check`
   - 느린 in-flight 요청이 있을 때 다른 healthy backend로 우회되는지 검증하는 시나리오
+- `raft-ha-cluster`
+  - 3-node Raft reverse proxy cluster와 3-backend 환경에서 bootstrap, join, replication, failover, persistence를 검증하는 시나리오
 
 ## 실행 예시
 
